@@ -47,6 +47,18 @@
        pointer-events:none; transition:opacity .5s; white-space:pre-line;"></div>
   <div id="blackout" style="position:fixed; inset:0; z-index:70; background:#000; opacity:0; pointer-events:none; transition:opacity .9s;"></div>
 
+  <!-- Completion screen, shown after all fireflies are woken -->
+  <div id="endcard" style="display:none; position:fixed; inset:0; z-index:9000; background:rgba(20,17,14,0.94);
+       color:#ece7e1; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:28px;">
+    <div style="letter-spacing:3px; font-size:13px; opacity:.8;">LANTERNLIGHT · EPISODE 01</div>
+    <div style="font-size:26px; font-weight:700; margin:8px 0 4px;">Episode complete ✨</div>
+    <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You relit the first lantern and woke the Glimmerlings. The Underglow remembers.</p>
+    <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
+    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">1 of 10 lanterns relit</div>
+    <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Find the next Sparkstone card to continue Fenn's journey — a friend named <b>Momo</b> is waiting in the dark.</p>
+    <button id="playAgain" style="padding:13px 26px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff;">Play again</button>
+  </div>
+
   <audio id="narration" src="./narration.mp3" preload="auto"></audio>
   <audio id="music" src="./music.mp3" preload="auto" loop></audio>
 
@@ -210,7 +222,23 @@
       showBanner('You woke the Underglow! ✨', 3000);
       setTimeout(() => showBanner('A friend is waiting in the dark…\nFind card 02', 4500), 3200);
       setTimeout(() => { collected.setAttribute('value', 'Card 1 of 10 relit ✨   Find card 02 →'); collected.setAttribute('visible', true); }, 3400);
+      setTimeout(showEndcard, 6000);                    // completion screen after the celebration
     }
+    // The "then what": a completion screen with progress + a way onward.
+    function showEndcard(){
+      const meter = document.getElementById('meter');
+      meter.innerHTML = '';
+      for (let i = 0; i < 10; i++){
+        const d = document.createElement('div');
+        d.style.cssText = 'width:16px; height:16px; border-radius:50%;' +
+          (i === 0 ? 'background:#ffcf6b; box-shadow:0 0 8px #ffcf6b;' : 'background:#4a4038;');
+        meter.appendChild(d);
+      }
+      const ec = document.getElementById('endcard');
+      ec.style.opacity = 0; ec.style.display = 'flex'; ec.style.transition = 'opacity .8s';
+      requestAnimationFrame(() => { ec.style.opacity = 1; });
+    }
+    document.getElementById('playAgain').addEventListener('click', () => location.reload());
     // Forgiving tap: collect the firefly nearest the finger (no need for a precise hit).
     function collectNearest(ev){
       const cam = sceneEl.camera; if (!cam || !flies.length) return;
