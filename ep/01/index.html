@@ -55,8 +55,9 @@
     <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You relit the first lantern and woke the Glimmerlings. The Underglow remembers.</p>
     <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
     <div style="font-size:14px; opacity:.85; margin-bottom:22px;">1 of 10 lanterns relit</div>
-    <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Find the next Sparkstone card to continue Fenn's journey — a friend named <b>Momo</b> is waiting in the dark.</p>
-    <button id="playAgain" style="padding:13px 26px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff;">Play again</button>
+    <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Fenn's journey continues — a friend named <b>Momo</b> is waiting in the dark.</p>
+    <button id="continueBtn" style="padding:13px 28px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff; margin-bottom:12px;">Continue to Episode 2 →</button>
+    <button id="playAgain" style="padding:11px 24px; font-size:15px; font-weight:500; border:1px solid #6a5f52; border-radius:12px; background:transparent; color:#ece7e1;">Play again</button>
   </div>
 
   <audio id="narration" src="./narration.mp3" preload="auto"></audio>
@@ -237,6 +238,7 @@
       requestAnimationFrame(() => { ec.style.opacity = 1; });
     }
     document.getElementById('playAgain').addEventListener('click', () => location.reload());
+    document.getElementById('continueBtn').addEventListener('click', () => { location.href = '../02/'; });
     // Forgiving tap: collect the firefly nearest the finger (no need for a precise hit).
     function collectNearest(ev){
       const cam = sceneEl.camera; if (!cam || !flies.length) return;
