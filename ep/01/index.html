@@ -42,7 +42,22 @@
        color:#ffe8b0; font-size:16px; font-weight:500; text-shadow:0 2px 6px #000; pointer-events:none;">Tap Fenn to light the lantern ✨</div>
   <div id="counter" style="display:none; position:fixed; top:64px; right:16px; z-index:60; color:#eaff9a;
        font-size:15px; font-weight:500; text-shadow:0 2px 6px #000; pointer-events:none;">0 / 14 woken</div>
+  <div id="banner" style="display:none; opacity:0; position:fixed; top:34%; left:0; right:0; z-index:65; text-align:center;
+       padding:0 24px; color:#fff; font-size:23px; font-weight:700; line-height:1.35; text-shadow:0 3px 10px #000;
+       pointer-events:none; transition:opacity .5s; white-space:pre-line;"></div>
   <div id="blackout" style="position:fixed; inset:0; z-index:70; background:#000; opacity:0; pointer-events:none; transition:opacity .9s;"></div>
+
+  <!-- Completion screen, shown after all fireflies are woken -->
+  <div id="endcard" style="display:none; position:fixed; inset:0; z-index:9000; background:rgba(20,17,14,0.94);
+       color:#ece7e1; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:28px;">
+    <div style="letter-spacing:3px; font-size:13px; opacity:.8;">LANTERNLIGHT · EPISODE 01</div>
+    <div style="font-size:26px; font-weight:700; margin:8px 0 4px;">Episode complete ✨</div>
+    <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You relit the first lantern and woke the Glimmerlings. The Underglow remembers.</p>
+    <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
+    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">1 of 10 lanterns relit</div>
+    <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Find the next Sparkstone card to continue Fenn's journey — a friend named <b>Momo</b> is waiting in the dark.</p>
+    <button id="playAgain" style="padding:13px 26px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff;">Play again</button>
+  </div>
 
   <audio id="narration" src="./narration.mp3" preload="auto"></audio>
   <audio id="music" src="./music.mp3" preload="auto" loop></audio>
@@ -131,6 +146,7 @@
     const blackout = document.getElementById('blackout');
     const goalEl = document.getElementById('goal');
     const counterEl = document.getElementById('counter');
+    const bannerEl = document.getElementById('banner');
 
     // Times measured from your narration.mp3 (each line's start).
     const CAPTIONS = [
@@ -144,6 +160,13 @@
     let playedOnce = false, ignited = false, introPlayed = false, introBroken = false;
 
     function showCaption(t){ capEl.textContent = t; capEl.style.opacity = t ? 1 : 0; }
+    let bannerTimer = null;
+    function showBanner(text, ms){
+      bannerEl.textContent = text; bannerEl.style.display = 'block';
+      requestAnimationFrame(() => { bannerEl.style.opacity = 1; });
+      clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => { bannerEl.style.opacity = 0; setTimeout(() => { bannerEl.style.display = 'none'; }, 500); }, ms);
+    }
     // Captions follow the audio clock, so they stay in sync through any pause/flicker.
     function captionAt(time){
       let cur = ""; for (const c of CAPTIONS){ if (time >= c.t) cur = c.text; else break; } return cur;
@@ -172,6 +195,7 @@
       goalEl.textContent = 'Tap the fireflies to wake them ✨';
       counterEl.textContent = '0 / ' + NUM_FLIES + ' woken';
       counterEl.style.display = 'block';
+      showBanner('Catch the Glimmerlings!\nTap the flying lights ✨', 3800);
     }
 
     // Collecting the fireflies (the mini-game after lighting).
@@ -184,10 +208,37 @@
       if (collectedCount >= NUM_FLIES){
         goalEl.style.display = 'none';
         counterEl.textContent = 'All ' + NUM_FLIES + ' woken! ✨';
-        collected.setAttribute('value', 'Card 1 of 10 relit ✨   Find card 02 →');
-        collected.setAttribute('visible', true);
+        finale();
       }
     }
+    // When every Glimmerling is woken: celebrate + tease the next card.
+    function finale(){
+      foxEl.setAttribute('animation__cheer',
+        'property: scale; dir: alternate; loop: 3; from: 0.32 0.32 0.32; to: 0.42 0.42 0.42; dur: 220; easing: easeInOutSine');
+      document.getElementById('lanternGlow').setAttribute('animation__bloom',
+        'property: light.intensity; to: 2.2; dur: 1000; easing: easeOutCubic');
+      document.getElementById('ambient').setAttribute('animation__bright',
+        'property: light.intensity; to: 1.25; dur: 1000');
+      showBanner('You woke the Underglow! ✨', 3000);
+      setTimeout(() => showBanner('A friend is waiting in the dark…\nFind card 02', 4500), 3200);
+      setTimeout(() => { collected.setAttribute('value', 'Card 1 of 10 relit ✨   Find card 02 →'); collected.setAttribute('visible', true); }, 3400);
+      setTimeout(showEndcard, 6000);                    // completion screen after the celebration
+    }
+    // The "then what": a completion screen with progress + a way onward.
+    function showEndcard(){
+      const meter = document.getElementById('meter');
+      meter.innerHTML = '';
+      for (let i = 0; i < 10; i++){
+        const d = document.createElement('div');
+        d.style.cssText = 'width:16px; height:16px; border-radius:50%;' +
+          (i === 0 ? 'background:#ffcf6b; box-shadow:0 0 8px #ffcf6b;' : 'background:#4a4038;');
+        meter.appendChild(d);
+      }
+      const ec = document.getElementById('endcard');
+      ec.style.opacity = 0; ec.style.display = 'flex'; ec.style.transition = 'opacity .8s';
+      requestAnimationFrame(() => { ec.style.opacity = 1; });
+    }
+    document.getElementById('playAgain').addEventListener('click', () => location.reload());
     // Forgiving tap: collect the firefly nearest the finger (no need for a precise hit).
     function collectNearest(ev){
       const cam = sceneEl.camera; if (!cam || !flies.length) return;
@@ -202,7 +253,7 @@
         const d = Math.hypot(sx - ev.clientX, sy - ev.clientY);
         if (d < bestD){ bestD = d; best = f; }
       }
-      if (best && bestD < 80) collectFirefly(best);
+      if (best && bestD < 90) collectFirefly(best);
     }
 
     // Fireflies (Glimmerlings) that stream out of the lantern when it's lit, then orbit the scene.
@@ -216,7 +267,7 @@
       const container = document.getElementById('fireflies');
       for (let i = 0; i < NUM_FLIES; i++){
         const s = document.createElement('a-sphere');
-        s.setAttribute('radius', 0.014);
+        s.setAttribute('radius', 0.018);
         s.setAttribute('color', '#eaff9a');
         s.setAttribute('material', 'shader: flat; transparent: true; opacity: 0');
         s.setAttribute('position', FLY_SRC.x + ' ' + FLY_SRC.y + ' ' + FLY_SRC.z);
