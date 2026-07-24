@@ -54,7 +54,7 @@
     <div style="font-size:26px; font-weight:700; margin:8px 0 4px;">Episode complete ✨</div>
     <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You relit the first lantern and woke the Glimmerlings. The Underglow remembers.</p>
     <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
-    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">1 of 10 lanterns relit</div>
+    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">1 of 5 lanterns relit</div>
     <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Fenn's journey continues — a friend named <b>Momo</b> is waiting in the dark.</p>
     <button id="continueBtn" style="padding:13px 28px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff; margin-bottom:12px;">Continue to Episode 2 →</button>
     <button id="playAgain" style="padding:11px 24px; font-size:15px; font-weight:500; border:1px solid #6a5f52; border-radius:12px; background:transparent; color:#ece7e1;">Play again</button>
@@ -227,7 +227,7 @@
     function showEndcard(){
       const meter = document.getElementById('meter');
       meter.innerHTML = '';
-      for (let i = 0; i < 10; i++){
+      for (let i = 0; i < 5; i++){
         const d = document.createElement('div');
         d.style.cssText = 'width:16px; height:16px; border-radius:50%;' +
           (i === 0 ? 'background:#ffcf6b; box-shadow:0 0 8px #ffcf6b;' : 'background:#4a4038;');
