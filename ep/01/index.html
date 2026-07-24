@@ -318,14 +318,33 @@
       requestAnimationFrame(flyTick);
     }
 
+    // Wait until the A-Frame scene AND MindAR are actually ready, then start (retrying
+    // past the known 'this.ui.showLoading' race), so a single tap always works.
+    function sceneReady(){
+      return new Promise(res => { sceneEl.hasLoaded ? res() : sceneEl.addEventListener('loaded', () => res(), { once: true }); });
+    }
+    async function startAR(){
+      await sceneReady();
+      const sys = sceneEl.systems['mindar-image-system'];
+      if (!sys) throw new Error('MindAR not ready — reload the page.');
+      let lastErr;
+      for (let i = 0; i < 30; i++){
+        try { await sys.start(); return; }
+        catch (e){
+          lastErr = e;
+          if (/showLoading|ui|undefined/i.test(String(e && e.message || e))) { await new Promise(r => setTimeout(r, 200)); continue; }
+          throw e;
+        }
+      }
+      throw lastErr || new Error('MindAR did not become ready');
+    }
+
     startBtn.addEventListener('click', async () => {
       startBtn.textContent = 'Starting…';
       document.getElementById('err').textContent = '';
       [narration, music, introVid].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
       try {
-        const sys = sceneEl.systems['mindar-image-system'];
-        if (!sys) throw new Error('MindAR not ready — reload the page.');
-        await sys.start();
+        await startAR();
         startEl.style.display = 'none';
         hintEl.style.display = 'block';
         chapterEl.style.display = 'block';
