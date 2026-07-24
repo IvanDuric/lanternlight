@@ -53,14 +53,13 @@
     <div style="font-size:26px; font-weight:700; margin:8px 0 4px;">Episode complete ✨</div>
     <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You helped Momo breathe out its worries. Calm returns to the Underglow.</p>
     <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
-    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">2 of 10 lanterns relit</div>
+    <div style="font-size:14px; opacity:.85; margin-bottom:22px;">2 of 5 lanterns relit</div>
     <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Two ink-otters are mapping the river ahead — a new adventure waits in Episode 3.</p>
     <button id="continueBtn" style="padding:13px 28px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff; margin-bottom:12px;">Continue to Episode 3 →</button>
     <button id="playAgain" style="padding:11px 24px; font-size:15px; font-weight:500; border:1px solid #6a5f52; border-radius:12px; background:transparent; color:#ece7e1;">Play again</button>
   </div>
 
-  <!-- Shared music bed lives in Episode 1's folder -->
-  <audio id="music" src="../01/music.mp3" preload="auto" loop></audio>
+  <audio id="music" src="./music.mp3" preload="auto" loop></audio>
 
   <a-scene
     mindar-image="imageTargetSrc: ../01/targets.mind; autoStart: false; filterMinCF: 0.00005; filterBeta: 5; missTolerance: 5; warmupTolerance: 5;"
@@ -70,7 +69,8 @@
 
     <a-assets>
       <a-asset-item id="sceneModel" src="../01/scene.glb"></a-asset-item>
-      <a-asset-item id="heroModel"  src="./momo.glb"></a-asset-item>
+      <a-asset-item id="heroModel"  src="./hero.glb"></a-asset-item>
+      <video id="introVid" src="./intro.mp4" preload="auto" playsinline webkit-playsinline muted crossorigin="anonymous"></video>
     </a-assets>
 
     <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
@@ -79,6 +79,9 @@
     <a-entity id="sun"     light="type: directional; intensity: 0.4; color: #b7c2e0" position="1 2 1"></a-entity>
 
     <a-entity mindar-image-target="targetIndex: 0">
+
+      <!-- PHASE 1: optional intro video over the card (falls back to 3D if no intro.mp4). -->
+      <a-video id="introPlane" src="#introVid" width="1" height="1.583" position="0 0 0.01" rotation="0 0 0" visible="false"></a-video>
 
       <a-entity id="rig" rotation="90 0 0" visible="false" scale="0.05 0.05 0.05"
                 animation__grow="property: scale; from: 0.05 0.05 0.05; to: 4 4 4; dur: 1400; easing: easeOutBack; startEvents: reveal">
@@ -89,12 +92,12 @@
                   material="shader: flat; transparent: true"
                   animation="property: scale; from: 0.1 0.1 0.1; to: 1 1 1; dur: 700; easing: easeOutBack; startEvents: reveal"></a-circle>
 
-        <!-- Calm glow at Momo's chest: OFF until Momo breathes. -->
+        <!-- Calm glow at the character's chest: OFF until tapped. -->
         <a-light id="lanternGlow" type="point" color="#a9d6ff" intensity="0" distance="1.3" position="0 0.2 0.05"></a-light>
         <a-sphere id="lanternCore" radius="0.03" color="#d8ecff" visible="false" position="0 0.2 0.05"
                   material="shader: flat; emissive: #a9d6ff"></a-sphere>
 
-        <!-- Pulsing hint on Momo before the tap. -->
+        <!-- Pulsing hint before the tap. -->
         <a-light id="emberLight" type="point" color="#8fb8ff" intensity="0.12" distance="0.8" position="0 0.2 0.05"
                  animation="property: light.intensity; dir: alternate; loop: true; from: 0.06; to: 0.28; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-light>
         <a-sphere id="lanternEmber" radius="0.02" color="#8fb8ff" position="0 0.2 0.05"
@@ -102,7 +105,7 @@
                   animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.2; to: 0.65; dur: 1100; easing: easeInOutSine; startEvents: reveal"
                   animation__s="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.35 1.35 1.35; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-sphere>
 
-        <!-- MOMO -->
+        <!-- HERO character -->
         <a-gltf-model id="hero" src="#heroModel" position="0 0 0" rotation="0 0 0" scale="0.34 0.34 0.34"
                       class="clickable"
                       animation__rise="property: position; from: 0 -0.12 0; to: 0 0 0; dur: 900; easing: easeOutCubic; startEvents: reveal"
@@ -124,19 +127,21 @@
     const music = document.getElementById('music');
     const targetEl = document.querySelector('[mindar-image-target]');
     const heroEl = document.getElementById('hero');
+    const introVid = document.getElementById('introVid');
+    const introPlane = document.getElementById('introPlane');
     const blackout = document.getElementById('blackout');
     const goalEl = document.getElementById('goal');
     const counterEl = document.getElementById('counter');
     const bannerEl = document.getElementById('banner');
 
-    // No narration audio this episode — captions run on a timer from the reveal.
+    // No narration audio yet — captions run on a timer from the reveal.
     const CAPTIONS = [
       { t: 0.0,  text: "Momo carries everyone's worries…" },
       { t: 3.6,  text: "…so no one else has to." },
       { t: 7.2,  text: "But nobody ever carried Momo's." },
       { t: 10.8, text: "Help it breathe.\nTap Momo." }
     ];
-    let capTimers = [], playedOnce = false, ignited = false;
+    let capTimers = [], playedOnce = false, ignited = false, introPlayed = false, introBroken = false;
 
     function showCaption(t){ capEl.textContent = t; capEl.style.opacity = t ? 1 : 0; }
     function runTimedCaptions(){
@@ -151,23 +156,17 @@
       bannerTimer = setTimeout(() => { bannerEl.style.opacity = 0; setTimeout(() => { bannerEl.style.display = 'none'; }, 500); }, ms);
     }
 
-    // Momo breathes: soft glow blooms, worries (fireflies) puff out.
     function igniteWorld(){
       if (ignited) return; ignited = true;
       capTimers.forEach(clearTimeout); showCaption('');
       ['lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.setAttribute('visible', false); });
-      document.getElementById('ambient').setAttribute('animation__i',
-        'property: light.intensity; to: 0.9; dur: 1200; easing: easeOutCubic');
-      document.getElementById('ambient').setAttribute('animation__c',
-        'property: light.color; to: #eaf1ff; dur: 1200');
-      document.getElementById('sun').setAttribute('animation__i',
-        'property: light.intensity; to: 1.05; dur: 1200; easing: easeOutCubic');
-      document.getElementById('lanternGlow').setAttribute('animation__on',
-        'property: light.intensity; to: 1.1; dur: 900; easing: easeOutBack');
+      document.getElementById('ambient').setAttribute('animation__i', 'property: light.intensity; to: 0.9; dur: 1200; easing: easeOutCubic');
+      document.getElementById('ambient').setAttribute('animation__c', 'property: light.color; to: #eaf1ff; dur: 1200');
+      document.getElementById('sun').setAttribute('animation__i', 'property: light.intensity; to: 1.05; dur: 1200; easing: easeOutCubic');
+      document.getElementById('lanternGlow').setAttribute('animation__on', 'property: light.intensity; to: 1.1; dur: 900; easing: easeOutBack');
       const core = document.getElementById('lanternCore');
       core.setAttribute('visible', true);
-      core.setAttribute('animation__p',
-        'property: scale; dir: alternate; loop: true; from: 1 1 1; to: 1.4 1.4 1.4; dur: 1400; easing: easeInOutSine');
+      core.setAttribute('animation__p', 'property: scale; dir: alternate; loop: true; from: 1 1 1; to: 1.4 1.4 1.4; dur: 1400; easing: easeInOutSine');
       spawnFireflies();
       goalEl.textContent = 'Catch the worries before they fade! ✨';
       counterEl.textContent = '0 / ' + NUM_FLIES + ' calmed';
@@ -188,21 +187,18 @@
       }
     }
     function finale(){
-      heroEl.setAttribute('animation__cheer',
-        'property: scale; dir: alternate; loop: 3; from: 0.34 0.34 0.34; to: 0.44 0.44 0.44; dur: 240; easing: easeInOutSine');
-      document.getElementById('lanternGlow').setAttribute('animation__bloom',
-        'property: light.intensity; to: 2.0; dur: 1000; easing: easeOutCubic');
-      document.getElementById('ambient').setAttribute('animation__bright',
-        'property: light.intensity; to: 1.2; dur: 1000');
+      heroEl.setAttribute('animation__cheer', 'property: scale; dir: alternate; loop: 3; from: 0.34 0.34 0.34; to: 0.44 0.44 0.44; dur: 240; easing: easeInOutSine');
+      document.getElementById('lanternGlow').setAttribute('animation__bloom', 'property: light.intensity; to: 2.0; dur: 1000; easing: easeOutCubic');
+      document.getElementById('ambient').setAttribute('animation__bright', 'property: light.intensity; to: 1.2; dur: 1000');
       showBanner('Momo can breathe again ✨', 2600);
       setTimeout(showEndcard, 3200);
     }
     function showEndcard(){
       const meter = document.getElementById('meter');
       meter.innerHTML = '';
-      for (let i = 0; i < 10; i++){
+      for (let i = 0; i < 5; i++){
         const d = document.createElement('div');
-        d.style.cssText = 'width:16px; height:16px; border-radius:50%;' +
+        d.style.cssText = 'width:18px; height:18px; border-radius:50%;' +
           (i < 2 ? 'background:#ffcf6b; box-shadow:0 0 8px #ffcf6b;' : 'background:#4a4038;');
         meter.appendChild(d);
       }
@@ -229,11 +225,10 @@
       if (best && bestD < 90) collectFirefly(best);
     }
 
-    // Worries (fireflies) that puff out of Momo, then drift around the scene.
     const NUM_FLIES = 14;
     let flies = [], fliesActive = false, fliesLastT = 0;
     const FLY_CENTER = { x: 0, y: 0.45, z: 0 };
-    const FLY_SRC = { x: 0, y: 0.2, z: 0.05 };            // Momo's chest
+    const FLY_SRC = { x: 0, y: 0.2, z: 0.05 };
     function easeOut(t){ return 1 - Math.pow(1 - t, 3); }
     function spawnFireflies(){
       if (fliesActive) return; fliesActive = true;
@@ -245,17 +240,9 @@
         s.setAttribute('material', 'shader: flat; transparent: true; opacity: 0');
         s.setAttribute('position', FLY_SRC.x + ' ' + FLY_SRC.y + ' ' + FLY_SRC.z);
         container.appendChild(s);
-        flies.push({
-          el: s,
-          r: 0.35 + Math.random() * 0.5,
-          theta: Math.random() * Math.PI * 2,
-          phi: 0.4 + Math.random() * 2.3,
-          thSpd: (0.2 + Math.random() * 0.5) * (Math.random() < 0.5 ? -1 : 1),
-          phSpd: (0.1 + Math.random() * 0.3) * (Math.random() < 0.5 ? -1 : 1),
-          blink: Math.random() * Math.PI * 2,
-          blSpd: 1.5 + Math.random() * 2.5,
-          spawn: 0, delay: Math.random() * 1.4
-        });
+        flies.push({ el: s, r: 0.35 + Math.random() * 0.5, theta: Math.random() * Math.PI * 2, phi: 0.4 + Math.random() * 2.3,
+          thSpd: (0.2 + Math.random() * 0.5) * (Math.random() < 0.5 ? -1 : 1), phSpd: (0.1 + Math.random() * 0.3) * (Math.random() < 0.5 ? -1 : 1),
+          blink: Math.random() * Math.PI * 2, blSpd: 1.5 + Math.random() * 2.5, spawn: 0, delay: Math.random() * 1.4 });
       }
       fliesLastT = performance.now();
       requestAnimationFrame(flyTick);
@@ -281,10 +268,7 @@
         const ty = FLY_CENTER.y + f.r * 0.55 * Math.cos(f.phi);
         const tz = FLY_CENTER.z + f.r * Math.sin(f.phi) * Math.sin(f.theta);
         const e = easeOut(f.spawn);
-        f.el.object3D.position.set(
-          FLY_SRC.x + (tx - FLY_SRC.x) * e,
-          FLY_SRC.y + (ty - FLY_SRC.y) * e,
-          FLY_SRC.z + (tz - FLY_SRC.z) * e);
+        f.el.object3D.position.set(FLY_SRC.x + (tx - FLY_SRC.x) * e, FLY_SRC.y + (ty - FLY_SRC.y) * e, FLY_SRC.z + (tz - FLY_SRC.z) * e);
         const m = f.el.getObject3D('mesh');
         if (m){ m.material.transparent = true; m.material.opacity = (f.delay > 0 ? 0 : (0.4 + 0.35 * Math.sin(f.blink)) * Math.min(1, f.spawn * 2)); }
       }
@@ -294,7 +278,7 @@
     startBtn.addEventListener('click', async () => {
       startBtn.textContent = 'Starting…';
       document.getElementById('err').textContent = '';
-      [music].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
+      [music, introVid].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
       try {
         const sys = sceneEl.systems['mindar-image-system'];
         if (!sys) throw new Error('MindAR not ready — reload the page.');
@@ -308,15 +292,12 @@
       }
     });
 
-    // Pinch to zoom the whole scene.
     const rigEl = document.getElementById('rig');
     let pinchStart = 0, rigScale = 4;
     document.addEventListener('touchmove', (e) => {
       if (e.touches.length === 2) {
         e.preventDefault();
-        const d = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX,
-          e.touches[0].clientY - e.touches[1].clientY);
+        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         if (!pinchStart) { pinchStart = d; return; }
         const s = Math.max(0.5, Math.min(9, rigScale * d / pinchStart));
         rigEl.object3D.scale.set(s, s, s);
@@ -324,15 +305,14 @@
       }
     }, { passive: false });
     document.addEventListener('touchend', (e) => {
-      if (e.touches.length < 2 && pinchStart) {
-        rigScale = parseFloat(rigEl.dataset.scale) || rigScale;
-        pinchStart = 0;
-      }
+      if (e.touches.length < 2 && pinchStart) { rigScale = parseFloat(rigEl.dataset.scale) || rigScale; pinchStart = 0; }
     });
 
-    // No intro this episode: the dark scene grows straight out of the card.
+    // PHASE 2: dark scene grows out of the card.
     function revealScene(){
-      if (playedOnce) return; playedOnce = true;
+      if (playedOnce) return; playedOnce = true; introPlayed = true;
+      introVid.pause();
+      introPlane.setAttribute('visible', false);
       document.getElementById('rig').setAttribute('visible', true);
       blackout.style.transition = 'none';
       blackout.style.opacity = 1;
@@ -345,17 +325,27 @@
         goalEl.style.display = 'block';
       });
     }
+    introVid.addEventListener('error', () => { introBroken = true; });
+    introVid.addEventListener('ended', revealScene);
 
     targetEl.addEventListener('targetFound', () => {
       hintEl.style.display = 'none';
-      revealScene();
+      if (!introPlayed) {
+        if (introBroken) { revealScene(); return; }       // no intro.mp4 -> straight to 3D
+        introPlane.setAttribute('visible', true);
+        if (music.paused) { music.volume = 0.35; music.play().catch(()=>{}); }
+        if (introVid.paused) introVid.play().catch(() => revealScene());
+      }
+    });
+
+    targetEl.addEventListener('targetLost', () => {
+      if (!introPlayed) introVid.pause();
     });
 
     sceneEl.addEventListener('click', (ev) => {
       if (!playedOnce) return;
       if (!ignited){
-        heroEl.setAttribute('animation__tap',
-          'property: rotation; from: 0 0 0; to: 0 360 0; dur: 700; easing: easeOutQuad');
+        heroEl.setAttribute('animation__tap', 'property: rotation; from: 0 0 0; to: 0 360 0; dur: 700; easing: easeOutQuad');
         igniteWorld();
         return;
       }
