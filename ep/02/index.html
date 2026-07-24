@@ -211,14 +211,7 @@
       requestAnimationFrame(() => { ec.style.opacity = 1; });
     }
     document.getElementById('playAgain').addEventListener('click', () => location.reload());
-    document.getElementById('continueBtn').addEventListener('click', () => {
-      const ec = document.getElementById('endcard');
-      ec.innerHTML = '<div style="max-width:340px; padding:0 8px; text-align:center;">' +
-        '<div style="font-size:24px; font-weight:700; margin-bottom:12px;">Episode 3 is coming ✨</div>' +
-        '<p style="opacity:.9; line-height:1.5;">The ink-otters are on their way. Once they are ready, Continue will bring you straight to them.</p>' +
-        '<button onclick="location.href=\'../01/\'" style="margin-top:20px; padding:12px 24px; font-size:15px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff;">Back to Episode 1</button>' +
-        '</div>';
-    });
+    document.getElementById('continueBtn').addEventListener('click', () => { location.href = '../03/'; });
 
     function collectNearest(ev){
       const cam = sceneEl.camera; if (!cam || !flies.length) return;
