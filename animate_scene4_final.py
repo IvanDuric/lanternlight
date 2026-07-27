@@ -26,6 +26,7 @@ SCENE_END = MALFUNCTION_PREVIEW_START + MALFUNCTION_END - 1
 MAIN_TRAVEL = 0.14
 PRESS_FRONT_Y = -0.79
 PRESS_FLOOR_Z = 0.0933
+PAPER_CLEARANCE = 0.007   # sheet centre above the measured floor top; see floor_top_z
 WARM_COLOR = (1.0, 0.48, 0.12, 1.0)
 
 
@@ -72,6 +73,21 @@ def set_origin_world(obj, location):
     obj.select_set(True)
     bpy.ops.object.origin_set(type="ORIGIN_CURSOR", center="MEDIAN")
     obj.select_set(False)
+
+
+def floor_top_z(default: float) -> float:
+    """Measured top surface of the floor slab.
+
+    PRESS_FLOOR_Z (0.0933) was close but not exact — the real top of 'pod' is
+    0.09523, and placing paper relative to the wrong value dropped the pile
+    0.93 mm BELOW the floor. Two near-coplanar flat planes z-fight, which on a
+    phone reads as a patch of floor flickering. Measure it instead of assuming,
+    so moving or rescaling the floor cannot reintroduce this.
+    """
+    floor = bpy.data.objects.get("pod")
+    if floor is None:
+        return default
+    return max((floor.matrix_world @ Vector(corner)).z for corner in floor.bound_box)
 
 
 def world_bbox_center(obj):
@@ -259,7 +275,10 @@ def build():
     feed_paper.parent = main
     feed_paper.location = paper_local
 
-    floor_z = PRESS_FLOOR_Z + 0.004
+    # A sheet is 0.006 thick with its origin at the centre, so its underside is
+    # 0.003 below this value. PAPER_CLEARANCE keeps that underside a clear 4 mm
+    # above the floor rather than grazing it.
+    floor_z = floor_top_z(PRESS_FLOOR_Z + 0.004) + PAPER_CLEARANCE
     # Keep the finished stack clear of the press's right foot and visibly on
     # the owl side of the machine.
     pile_center = (0.76, -1.08, floor_z)
