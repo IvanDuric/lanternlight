@@ -75,6 +75,70 @@ def set_origin_world(obj, location):
     obj.select_set(False)
 
 
+def deskin_floor() -> str:
+    """Strip the buried second skin out of the floor mesh.
+
+    'pod' comes out of Tripo double-skinned: two upward-facing surfaces stacked
+    0.7-4.1 mm apart, with a 0.6 mm air gap between the buried plate (1653 verts,
+    z 0.0000-0.0697 in world units) and the visible top (2935 verts, 0.0702-0.0953).
+    Surfaces that close z-fight, and on a phone's 16-bit depth buffer they fight
+    badly — this is the patch of floor that flickers. It is the mesh itself, so no
+    amount of lifting the paper above it helps.
+
+    The visible top surface is kept exactly as authored, UVs and all. Everything
+    below the air gap is deleted, then Solidify rebuilds a clean closed slab of the
+    same thickness, so the floor still has a proper edge when seen side-on.
+    """
+    floor = bpy.data.objects.get("pod")
+    if floor is None or floor.type != "MESH":
+        return "no 'pod' mesh found — floor left alone"
+
+    import bmesh
+
+    mesh = floor.data
+    heights = sorted(vertex.co.z for vertex in mesh.vertices)
+    low, high = heights[0], heights[-1]
+    span = high - low
+    if span <= 0:
+        return "floor is flat — nothing to do"
+
+    # The widest empty band in the upper part of the mesh is the air gap between
+    # the two skins. Found rather than hard-coded, so a re-scan of the floor with
+    # different proportions is still handled.
+    best_gap, cut = 0.0, None
+    for lower, upper in zip(heights, heights[1:]):
+        if lower < low + span * 0.4:
+            continue
+        if upper - lower > best_gap:
+            best_gap, cut = upper - lower, (lower + upper) / 2.0
+    if cut is None or best_gap < span * 0.02:
+        return "floor is single-skinned already — nothing to do"
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    doomed = [
+        face for face in bm.faces
+        if sum(v.co.z for v in face.verts) / len(face.verts) < cut
+    ]
+    removed = len(doomed)
+    bmesh.ops.delete(bm, geom=doomed, context="FACES")
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+
+    bpy.ops.object.select_all(action="DESELECT")
+    floor.select_set(True)
+    bpy.context.view_layer.objects.active = floor
+    solidify = floor.modifiers.new("Floor thickness", "SOLIDIFY")
+    solidify.thickness = span
+    solidify.offset = -1.0                 # grow downward, leave the top surface put
+    bpy.ops.object.modifier_apply(modifier=solidify.name)
+    floor.select_set(False)
+
+    return (f"removed {removed} buried faces (cut at z={cut:.4f}, "
+            f"air gap {best_gap * 1000:.2f} mm), rebuilt a {span:.4f} solid slab")
+
+
 def floor_top_z(default: float) -> float:
     """Measured top surface of the floor slab.
 
@@ -225,6 +289,8 @@ def build():
     bulbs = [bpy.data.objects.get(name) for name in ("lampa", "sijalica2", "sijalica3")]
     if not all((presa, main, handle, head, globe, *bulbs)):
         raise RuntimeError("Scene4_Final.blend is missing an expected press, owl, globe or bulb object")
+
+    print("Floor: " + deskin_floor())
 
     # Generated props are rebuilt deterministically each time this script runs.
     for obj in list(bpy.data.objects):

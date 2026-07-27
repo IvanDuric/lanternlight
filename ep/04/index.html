@@ -49,6 +49,29 @@
           model.traverse((node) => { if (node.isLight) strays.push(node); });
           strays.forEach((light) => light.parent && light.parent.remove(light));
 
+          /* Floor flicker, the real cause.
+
+             Raising the paper in Blender was not enough. A-Frame's default camera
+             (near 0.005, far 10000) leaves roughly 12 mm of resolvable depth at
+             normal viewing distance on a phone's 16-bit depth buffer, so a sheet
+             4.6 mm above the floor is well inside the GPU's margin of error and
+             the two surfaces alternate frame to frame.
+
+             polygonOffset pushes the floor's depth values slightly away from the
+             camera without moving it, so anything resting on it always wins the
+             depth test. This is the standard fix for decals on surfaces and it
+             works no matter how coarse the depth buffer is. */
+          const floor = model.getObjectByName('pod');
+          if (floor && floor.material) {
+            const floorMaterials = Array.isArray(floor.material) ? floor.material : [floor.material];
+            floorMaterials.forEach((material) => {
+              material.polygonOffset = true;
+              material.polygonOffsetFactor = 2;
+              material.polygonOffsetUnits = 2;
+              material.needsUpdate = true;
+            });
+          }
+
           model.animations.forEach((clip) => {
             if (clip.name.startsWith('Scene04_Normal_')) this.clips.normal.push(clip);
             else if (clip.name.startsWith('Scene04_Malfunction_')) this.clips.malfunction.push(clip);
@@ -295,15 +318,9 @@
                   animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.2; to: 0.65; dur: 1100; easing: easeInOutSine; startEvents: reveal"
                   animation__s="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.35 1.35 1.35; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-sphere>
 
-        <!-- Glowing rings on the floor marking what can be tapped. The floor top
-             is at rig y 0.0286 (0.09523 * 0.30), so these sit just above it.
-               Silva  model (0.985, _, 0.00) -> rig ( 0.126, _, -0.190)
-               press  model (0.000, _, 0.79) -> rig (-0.170, _,  0.047)   -->
-        <a-torus id="silvaRing" visible="false" radius="0.15" radius-tubular="0.007"
-                 position="0.126 0.031 -0.19" rotation="-90 0 0" color="#ffd27a"
-                 material="shader: flat; transparent: true; opacity: 0.85"
-                 animation__p="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.2 1.2 1.2; dur: 1000; easing: easeInOutSine"
-                 animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.3; to: 0.9; dur: 1000; easing: easeInOutSine"></a-torus>
+        <!-- Glowing ring on the floor under the press, shown once the narration
+             ends. Floor top is rig y 0.0286 (0.09523 * 0.30), so it sits just above.
+               press  model (0.000, _, 0.79) -> rig (-0.170, _, 0.047)   -->
 
         <a-torus id="pressHint" visible="false" radius="0.16" radius-tubular="0.007"
                  position="-0.17 0.031 0.047" rotation="-90 0 0" color="#ffd27a"
@@ -504,7 +521,6 @@
     // don't tell them to do the thing they just did.
     function igniteWorld(promptForPress){
       if (ignited) return; ignited = true;
-      document.getElementById('silvaRing').setAttribute('visible', false);
       ['lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.setAttribute('visible', false); });
       document.getElementById('ambient').setAttribute('animation__i', 'property: light.intensity; to: 0.85; dur: 1200; easing: easeOutCubic');
       document.getElementById('sun').setAttribute('animation__i', 'property: light.intensity; to: 0.95; dur: 1200; easing: easeOutCubic');
@@ -847,9 +863,8 @@
         blackout.style.transition = 'opacity 1.1s';
         blackout.style.opacity = 0;
         ['rig','lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.emit('reveal'); });
-        // Mark both tappable things from the moment the room appears.
-        document.getElementById('silvaRing').setAttribute('visible', true);
-        pressHint.setAttribute('visible', true);
+        // The ring around the press is held back until the narration finishes,
+        // so it does not compete with Silva while she is being introduced.
         music.volume = 0.22; if (music.paused) music.play().catch(()=>{});
         narration.currentTime = 0; narration.play().catch(()=>{});
         goalWrapEl.style.display = 'block';
@@ -857,7 +872,14 @@
     }
     introVid.addEventListener('error', () => { introBroken = true; });
     introVid.addEventListener('ended', revealScene);
-    narration.addEventListener('ended', () => { showCaption(''); music.volume = 0.32; });
+    narration.addEventListener('ended', () => {
+      showCaption(''); music.volume = 0.32;
+      // Silva has finished speaking — now point at the press.
+      if (phase === 'idle' || phase === 'press') {
+        pressHint.setAttribute('visible', true);
+        if (!ignited) goalEl.textContent = 'Tap Silva or the press to begin ✨';
+      }
+    });
 
     targetEl.addEventListener('targetFound', () => {
       hintEl.style.display = 'none';
