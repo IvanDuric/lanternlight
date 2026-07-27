@@ -40,3 +40,6 @@ ep/**/_*.wav
 
 # byte-identical duplicate of ep/02/hero.glb, referenced by nothing
 ep/02/momo.glb
+
+# Blender source backup, not needed by the site
+ep/01/fox_original_unrigged.glb

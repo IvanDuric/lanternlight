@@ -6,6 +6,28 @@
   <title>Lanternlight — Episode 01</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script>
+    // Play Fenn's embedded Blender idle without requiring another A-Frame add-on.
+    AFRAME.registerComponent('fenn-idle', {
+      init: function () {
+        this.mixer = null;
+        this.el.addEventListener('model-loaded', (event) => {
+          const model = event.detail.model;
+          const clips = model.animations || [];
+          const idle = clips.find((clip) => clip.name === 'Fenn_Idle') || clips[0];
+          if (!idle) return;
+          this.mixer = new THREE.AnimationMixer(model);
+          this.mixer.clipAction(idle).setLoop(THREE.LoopRepeat, Infinity).play();
+        });
+      },
+      tick: function (_time, delta) {
+        if (this.mixer) this.mixer.update(delta / 1000);
+      },
+      remove: function () {
+        if (this.mixer) this.mixer.stopAllAction();
+      }
+    });
+  </script>
   <style>
     body { margin: 0; font-family: system-ui, sans-serif; background:#000; }
     #start { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
@@ -113,11 +135,27 @@
                   animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.2; to: 0.65; dur: 1100; easing: easeInOutSine; startEvents: reveal"
                   animation__s="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.35 1.35 1.35; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-sphere>
 
+        <!-- Ring on the ground under Fenn, revealed once the narration finishes,
+             so the child knows he is the thing to tap. Fenn's footprint at scale
+             0.32 is 0.16 x 0.30, so radius 0.19 sits just outside his paws. It is
+             at y 0.02, above the 0.01 glow pool, so the two do not z-fight. -->
+        <a-torus id="foxRing" visible="false" radius="0.19" radius-tubular="0.008"
+                 position="0 0.02 0" rotation="-90 0 0" color="#ffcf6b"
+                 material="shader: flat; transparent: true; opacity: 0.85"
+                 animation__p="property: scale; dir: alternate; loop: true; from: 0.82 0.82 0.82; to: 1.18 1.18 1.18; dur: 1000; easing: easeInOutSine"
+                 animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.3; to: 0.9; dur: 1000; easing: easeInOutSine"></a-torus>
+
         <!-- THE FOX: feet on the card floor, small, rises out of the card. -->
-        <a-gltf-model id="fox" src="#foxModel" position="0 0 0" rotation="0 0 0" scale="0.32 0.32 0.32"
+        <a-gltf-model id="fox" src="#foxModel" fenn-idle position="0 0 0" rotation="0 0 0" scale="0.32 0.32 0.32"
                       class="clickable"
-                      animation__rise="property: position; from: 0 -0.12 0; to: 0 0 0; dur: 900; easing: easeOutCubic; startEvents: reveal"
-                      animation__bob="property: position; dir: alternate; loop: true; from: 0 0 0; to: 0 0.03 0; dur: 1800; easing: easeInOutSine; delay: 900; startEvents: reveal">
+                      animation__rise="property: position; from: 0 -0.12 0; to: 0 0 0; dur: 900; easing: easeOutCubic; startEvents: reveal">
+                      <!-- The old animation__bob (entity bobbing 0.03 up and down on a
+                           1.8s cycle) is gone: Fenn_Idle from Blender now drives his
+                           motion, and running both layered two different breathing
+                           rhythms on top of each other. Restore it by re-adding:
+                           animation__bob="property: position; dir: alternate; loop: true;
+                           from: 0 0 0; to: 0 0.03 0; dur: 1800; easing: easeInOutSine;
+                           delay: 900; startEvents: reveal" -->
         </a-gltf-model>
 
         <!-- Fireflies (Glimmerlings) get added here when the lantern is lit -->
@@ -179,7 +217,7 @@
     // The Episode 1 payoff: the dark forest lights up.
     function igniteWorld(){
       if (ignited) return; ignited = true;
-      ['lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.setAttribute('visible', false); });
+      ['lanternEmber','emberLight','foxRing'].forEach(id => { const e = document.getElementById(id); if (e) e.setAttribute('visible', false); });
       document.getElementById('ambient').setAttribute('animation__i',
         'property: light.intensity; to: 0.95; dur: 1200; easing: easeOutCubic');
       document.getElementById('ambient').setAttribute('animation__c',
@@ -392,7 +430,12 @@
         blackout.style.transition = 'opacity 1.1s';
         blackout.style.opacity = 0;
         ['rig','fox','portal','lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.emit('reveal'); });
-        music.volume = 0.22;                             // duck the music bed under narration
+        // Duck the bed under the narration — and START it if it is not already
+        // running. This line used to set the volume only, so whenever the play()
+        // in targetFound did not take (a broken music.mp3, a rejected autoplay,
+        // or the no-intro-video path below) the episode stayed silent forever.
+        music.volume = 0.22;
+        if (music.paused) music.play().catch(()=>{});
         narration.currentTime = 0; narration.play().catch(()=>{});
         goalEl.style.display = 'block';                  // "Tap Fenn to light the lantern" (stays until tapped)
       });
@@ -403,10 +446,13 @@
     targetEl.addEventListener('targetFound', () => {
       hintEl.style.display = 'none';
       if (!introPlayed) {
-        // PHASE 1: play the intro video over the card
+        // PHASE 1: play the intro video over the card.
+        // The music bed is NOT started here any more. intro.mp4 now carries the
+        // prologue's music muxed onto it (make_ep01_audio.py), in the sync it was
+        // rendered in — starting music.mp3 as well would play the same cue twice,
+        // out of phase. revealScene() picks the loop up when the video ends.
         if (introBroken) { revealScene(); return; }   // no intro.mp4 -> skip to 3D
         introPlane.setAttribute('visible', true);
-        if (music.paused) { music.volume = 0.35; music.play().catch(()=>{}); }   // single music bed, from the intro on
         if (introVid.paused) introVid.play().catch(() => revealScene());  // resume, don't restart
       }
       // after the reveal, the story keeps playing regardless of tracking
@@ -418,6 +464,11 @@
 
     narration.addEventListener('ended', () => {
       showCaption(''); music.volume = 0.3;   // narration done; "tap Fenn" hint stays until the child lights it
+      // Fenn has finished being introduced — now mark him as the thing to tap.
+      if (!ignited) {
+        const ring = document.getElementById('foxRing');
+        if (ring) ring.setAttribute('visible', true);
+      }
     });
 
     function tapIsNearCharacter(ev, character, radius = 115){

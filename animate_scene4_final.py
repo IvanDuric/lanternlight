@@ -85,9 +85,16 @@ def deskin_floor() -> str:
     badly — this is the patch of floor that flickers. It is the mesh itself, so no
     amount of lifting the paper above it helps.
 
-    The visible top surface is kept exactly as authored, UVs and all. Everything
-    below the air gap is deleted, then Solidify rebuilds a clean closed slab of the
-    same thickness, so the floor still has a proper edge when seen side-on.
+    The visible top surface is kept exactly as authored, UVs and all, and
+    everything below the air gap is deleted. The floor is left as a single open
+    surface on purpose.
+
+    An earlier version added a Solidify modifier afterwards, to give the slab a
+    real edge when seen side-on. That made things worse, not better: the floor is
+    uneven, so the offset copy poked back through the original in places. Face
+    count went 2383 -> 12368 and overlapping upward faces went 11 -> 135. The
+    diorama is viewed from above and in front, resting on a card, so a floor with
+    no underside costs nothing and cannot fight itself.
     """
     floor = bpy.data.objects.get("pod")
     if floor is None or floor.type != "MESH":
@@ -116,27 +123,37 @@ def deskin_floor() -> str:
 
     bm = bmesh.new()
     bm.from_mesh(mesh)
+    before = len(bm.faces)
     doomed = [
         face for face in bm.faces
         if sum(v.co.z for v in face.verts) / len(face.verts) < cut
     ]
     removed = len(doomed)
     bmesh.ops.delete(bm, geom=doomed, context="FACES")
+
+    # Verify rather than assume: count upward-facing pairs still stacked within a
+    # 2 cm column. Anything left here would still shimmer, so it gets reported.
+    columns: dict[tuple[int, int], list[float]] = {}
+    for face in bm.faces:
+        if face.normal.z <= 0.85:
+            continue
+        centre = sum((v.co for v in face.verts), Vector()) / len(face.verts)
+        world = floor.matrix_world @ centre
+        columns.setdefault((int(world.x // 0.02), int(world.y // 0.02)), []).append(world.z)
+    stacked = sum(
+        1
+        for heights in columns.values()
+        for lower, upper in zip(sorted(heights), sorted(heights)[1:])
+        if 0.0002 < upper - lower < 0.02
+    )
+
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
 
-    bpy.ops.object.select_all(action="DESELECT")
-    floor.select_set(True)
-    bpy.context.view_layer.objects.active = floor
-    solidify = floor.modifiers.new("Floor thickness", "SOLIDIFY")
-    solidify.thickness = span
-    solidify.offset = -1.0                 # grow downward, leave the top surface put
-    bpy.ops.object.modifier_apply(modifier=solidify.name)
-    floor.select_set(False)
-
-    return (f"removed {removed} buried faces (cut at z={cut:.4f}, "
-            f"air gap {best_gap * 1000:.2f} mm), rebuilt a {span:.4f} solid slab")
+    verdict = "single-skinned" if stacked == 0 else f"WARNING: {stacked} overlapping pairs remain"
+    return (f"removed {removed} of {before} buried faces (cut at z={cut:.4f}, "
+            f"air gap {best_gap * 1000:.2f} mm) -> {verdict}")
 
 
 def floor_top_z(default: float) -> float:
