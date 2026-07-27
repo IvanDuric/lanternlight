@@ -526,7 +526,7 @@
     startBtn.addEventListener('click', async () => {
       startBtn.textContent = 'Starting…';
       document.getElementById('err').textContent = '';
-      unlockAudio();
+      await unlockAudio();
       try {
         sceneEl.setAttribute('mindar-image',
           'imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; ' +
@@ -545,13 +545,27 @@
     });
 
     document.getElementById('screenBtn').addEventListener('click', async () => {
-      unlockAudio();
+      await unlockAudio();
       try { await startScreenMode(); }
       catch (err) { document.getElementById('err').textContent = 'Could not start: ' + (err.message || err); }
     });
 
+    /* Unlock the media elements inside the click, and WAIT for it.
+
+       This used to fire and forget. Each element is played muted, then paused
+       again once that promise resolves — so if anything called music.play()
+       before the promise landed, the unlock's own pause() arrived afterwards and
+       silenced it. In AR that never showed up, because starting the camera and
+       finding the marker takes seconds. Screen mode goes straight from the click
+       to revealScene(), so the pause always won and the episode played silent. */
     function unlockAudio(){
-      [music, introVid, narration].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
+      return Promise.all([music, introVid, narration].map(a => {
+        a.muted = true;
+        const p = a.play();
+        if (!p) { a.muted = false; return Promise.resolve(); }
+        return p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; })
+                .catch(() => { a.muted = false; });
+      }));
     }
 
     const rigEl = document.getElementById('rig');

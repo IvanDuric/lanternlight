@@ -6,6 +6,7 @@
   <title>Lanternlight — Episode 02</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="../modes.js"></script>
   <style>
     body { margin: 0; font-family: system-ui, sans-serif; background:#000; }
     #start { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
@@ -13,8 +14,10 @@
     #start .kicker { letter-spacing: 3px; font-size: 13px; opacity:.8; }
     #start h1 { font-size: 24px; letter-spacing: 1px; margin: 6px 0 10px; }
     #start p  { max-width: 300px; opacity: .85; line-height: 1.5; margin: 0; }
-    #start button { margin-top: 22px; padding: 14px 30px; font-size: 18px; font-weight: 700;
-      border: none; border-radius: 12px; background: #d64b3a; color: white; }
+    #start button { margin-top: 14px; padding: 14px 30px; font-size: 17px; font-weight: 700;
+      border: none; border-radius: 12px; background: #d64b3a; color: white; min-width: 262px; }
+    #start button.ghost { background: transparent; color: #ece7e1; border: 1px solid #6a5f52; font-weight: 600; }
+    #start .fine { margin-top: 16px; font-size: 12.5px; opacity: .6; max-width: 280px; line-height: 1.45; }
     #hint { position: fixed; bottom: 22px; left: 0; right: 0; z-index: 50; text-align: center;
       color: #fff; text-shadow: 0 1px 4px #000; font-size: 15px; pointer-events: none; }
     #caption { position: fixed; bottom: 8%; left: 0; right: 0; z-index: 60; text-align: center;
@@ -30,7 +33,9 @@
     <div class="kicker">LANTERNLIGHT · 02 / 10</div>
     <h1>The Bear Who Ate Worries</h1>
     <p>Point your camera at your Sparkstone card, then tap Momo to help it breathe. Sound on 🔊</p>
-    <button id="startBtn">Tap to begin</button>
+    <button id="startBtn">Use my Sparkstone card 📷</button>
+    <button id="screenBtn" class="ghost">Play on screen — no card 🖥️</button>
+    <p class="fine">Screen mode needs no camera and no printed card. Drag to turn the scene, pinch or scroll to zoom.</p>
     <p id="err" style="color:#ffb4a8; font-size:13px; margin-top:14px; max-width:300px;"></p>
   </div>
 
@@ -62,8 +67,9 @@
   <audio id="music" src="./music.mp3" preload="auto" loop></audio>
   <audio id="narration" src="./narration.mp3" preload="auto"></audio>
 
+  <!-- mindar-image is attached at runtime, only in AR mode, so screen mode
+       never opens the camera at all. See ../modes.js -->
   <a-scene
-    mindar-image="imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; filterBeta: 5; missTolerance: 5; warmupTolerance: 5;"
     gltf-model="dracoDecoderPath: https://www.gstatic.com/draco/v1/decoders/"
     color-space="sRGB" renderer="colorManagement: true, physicallyCorrectLights: true, exposure: 1.1"
     vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
@@ -74,13 +80,15 @@
       <video id="introVid" src="./intro.mp4" preload="auto" playsinline webkit-playsinline muted crossorigin="anonymous"></video>
     </a-assets>
 
-    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+    <a-entity id="camPivot" position="0 0 0" rotation="0 0 0">
+      <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+    </a-entity>
 
     <!-- Momo begins in the light; the tap starts the activity rather than relighting the world. -->
     <a-entity id="ambient" light="type: ambient; intensity: 0.9; color: #eaf1ff"></a-entity>
     <a-entity id="sun"     light="type: directional; intensity: 1.05; color: #f8fbff" position="1 2 1"></a-entity>
 
-    <a-entity mindar-image-target="targetIndex: 0">
+    <a-entity id="anchor">
 
       <!-- PHASE 1: optional intro video over the card (falls back to 3D if no intro.mp4). -->
       <a-video id="introPlane" src="#introVid" width="1" height="1.583" position="0 0 0.01" rotation="0 0 0" visible="false"></a-video>
@@ -128,7 +136,7 @@
     const capEl = document.getElementById('caption');
     const music = document.getElementById('music');
     const narration = document.getElementById('narration');
-    const targetEl = document.querySelector('[mindar-image-target]');
+    const targetEl = document.getElementById('anchor');
     const heroEl = document.getElementById('hero');
     const introVid = document.getElementById('introVid');
     const introPlane = document.getElementById('introPlane');
@@ -285,40 +293,15 @@
     function sceneReady(){
       return new Promise(res => { sceneEl.hasLoaded ? res() : sceneEl.addEventListener('loaded', () => res(), { once: true }); });
     }
-    async function startAR(){
-      await sceneReady();
-      const sys = sceneEl.systems['mindar-image-system'];
-      if (!sys) throw new Error('MindAR not ready — reload the page.');
-      let lastErr;
-      for (let i = 0; i < 30; i++){
-        try { await sys.start(); return; }
-        catch (e){
-          lastErr = e;
-          if (/showLoading|ui|undefined/i.test(String(e && e.message || e))) { await new Promise(r => setTimeout(r, 200)); continue; }
-          throw e;
-        }
-      }
-      throw lastErr || new Error('MindAR did not become ready');
-    }
 
-    startBtn.addEventListener('click', async () => {
-      startBtn.textContent = 'Starting…';
-      document.getElementById('err').textContent = '';
-      [music, introVid, narration].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
-      try {
-        await startAR();
-        startEl.style.display = 'none';
-        hintEl.style.display = 'block';
-        chapterEl.style.display = 'block';
-      } catch (err) {
-        startBtn.textContent = 'Tap to retry';
-        document.getElementById('err').textContent = 'Could not start: ' + (err.message || err);
-      }
-    });
+    // Two ways to play — AR with the printed card, or on screen with no
+    // camera at all. Both entry points live in ../modes.js.
+    LL.install({ targets: '../01/targets.mind?v=2', reveal: revealScene });
 
     const rigEl = document.getElementById('rig');
     let pinchStart = 0, rigScale = 4;
     document.addEventListener('touchmove', (e) => {
+      if (LL.screenMode) return;        // modes.js owns pinch on screen
       if (e.touches.length === 2) {
         e.preventDefault();
         const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);

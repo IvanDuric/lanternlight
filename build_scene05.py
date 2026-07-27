@@ -34,7 +34,8 @@ GLB_OUT = ROOT_DIR / "ep" / "05" / "scene5.glb"
 # --- placement knobs ---------------------------------------------------------
 # Bram's height as a multiple of the desk's height. Doubled from 1.35 on request.
 BRAM_HEIGHT_VS_TABLE = 2.7
-# Where he stands along the fire-pit -> desk line. 0.5 is the midpoint.
+# Where he stands in the GAP between the fire pit and the desk. 0.5 is the middle
+# of the gap; lower moves him toward the fire, higher toward the desk.
 BRAM_ALONG = 0.5
 # Pushed toward the camera off that line, in Bram-depths, so neither landmark
 # overlaps him. He was previously tucked against the desk and half hidden.
@@ -49,8 +50,13 @@ GROUND_NAME = None
 # miniature beetle.
 BRAM_MIN_FRACTION = 0.70
 # Bounding boxes touch long before meshes do, so an overlap only counts once it
-# is deeper than this fraction of his own footprint.
-BRAM_OVERLAP_TOLERANCE = 0.12
+# is deeper than this fraction of his own footprint. Kept small: at 0.12 he was
+# allowed to stand a good way into the desk.
+BRAM_OVERLAP_TOLERANCE = 0.04
+# How far the anvil sits out from his body, as a fraction of his width. The
+# hammer lands where it lands; this slides the anvil along that strike direction
+# so it is not tucked against his chest.
+ANVIL_PUSH = 0.22
 # All of Bram's motion is merged into this single clip so the head turn and the
 # hammer strike play together instead of as three separate animations.
 MERGED_CLIP = "Bram_Work"
@@ -284,8 +290,18 @@ def fit_bram(root, members, table, fire, ground, floor_z):
         half_x = (high.x - low.x) / 2
         half_y = depth / 2
 
-        target_x = fire_centre.x + (table_centre.x - fire_centre.x) * BRAM_ALONG
-        target_y = fire_centre.y + (table_centre.y - fire_centre.y) * BRAM_ALONG
+        # Aim at the GAP between the two, not the midpoint of their centres.
+        # The desk is wide, so centre-to-centre put him standing on it.
+        axis = Vector((table_centre.x - fire_centre.x, table_centre.y - fire_centre.y))
+        if axis.length < 1e-6:
+            axis = Vector((0.0, 1.0))
+        axis.normalize()
+        fire_reach = abs(axis.x) * (f_high.x - f_low.x) / 2 + abs(axis.y) * (f_high.y - f_low.y) / 2
+        table_reach = abs(axis.x) * (t_high.x - t_low.x) / 2 + abs(axis.y) * (t_high.y - t_low.y) / 2
+        gap_start = Vector((fire_centre.x, fire_centre.y)) + axis * fire_reach
+        gap_end = Vector((table_centre.x, table_centre.y)) - axis * table_reach
+        target_x = gap_start.x + (gap_end.x - gap_start.x) * BRAM_ALONG
+        target_y = gap_start.y + (gap_end.y - gap_start.y) * BRAM_ALONG
         target_y += FRONT * depth * BRAM_CLEARANCE
 
         # Never let him leave the diorama, whatever the clearance asks for.
@@ -380,9 +396,26 @@ def align_anvil_to_strike(members, scene) -> None:
         a_low = Vector(tuple(min(a_low[i], o_low[i]) for i in range(3)))
         a_high = Vector(tuple(max(a_high[i], o_high[i]) for i in range(3)))
 
+    # Land the anvil under the hammer, then slide it away from his body along the
+    # strike direction so it is not tucked against his chest.
+    body = [o for o in members
+            if o.type == "MESH" and len(o.data.vertices) and "Anvil" not in o.name]
+    b_low = Vector((9e9, 9e9, 9e9))
+    b_high = Vector((-9e9, -9e9, -9e9))
+    for obj in body:
+        o_low, o_high = world_bbox(obj)
+        b_low = Vector(tuple(min(b_low[i], o_low[i]) for i in range(3)))
+        b_high = Vector(tuple(max(b_high[i], o_high[i]) for i in range(3)))
+    away = Vector((best_xy[0] - (b_low.x + b_high.x) / 2,
+                   best_xy[1] - (b_low.y + b_high.y) / 2))
+    if away.length < 1e-6:
+        away = Vector((0.0, FRONT))
+    away.normalize()
+    push = away * (ANVIL_PUSH * (b_high.x - b_low.x))
+
     delta = Vector((
-        best_xy[0] - (a_low.x + a_high.x) / 2,
-        best_xy[1] - (a_low.y + a_high.y) / 2,
+        best_xy[0] + push.x - (a_low.x + a_high.x) / 2,
+        best_xy[1] + push.y - (a_low.y + a_high.y) / 2,
         best_z - a_high.z,
     ))
     for obj in anvil:
@@ -396,8 +429,8 @@ def align_anvil_to_strike(members, scene) -> None:
           f"z {best_z:+.3f}  over x {best_xy[0]:+.3f} y {best_xy[1]:+.3f}")
     print(f"  anvil top was at z {a_high.z:+.3f}, centred x {(a_low.x + a_high.x) / 2:+.3f} "
           f"y {(a_low.y + a_high.y) / 2:+.3f}")
-    print(f"  moved by          x {delta.x:+.3f} y {delta.y:+.3f} z {delta.z:+.3f}"
-          f"  -> the hammer now lands on it")
+    print(f"  pushed clear of his body by {push.length:.3f} (ANVIL_PUSH={ANVIL_PUSH})")
+    print(f"  moved by          x {delta.x:+.3f} y {delta.y:+.3f} z {delta.z:+.3f}")
 
 
 def merge_bram_animation(members) -> None:
