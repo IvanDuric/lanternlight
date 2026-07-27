@@ -44,6 +44,13 @@ FRONT = -1.0
 # Leave as None to auto-detect; set to an object name to override.
 FIRE_PIT_NAME = None
 GROUND_NAME = None
+# If he cannot fit at BRAM_HEIGHT_VS_TABLE he is shrunk, but never below this
+# fraction of it — better to report a tight fit than to silently deliver a
+# miniature beetle.
+BRAM_MIN_FRACTION = 0.70
+# Bounding boxes touch long before meshes do, so an overlap only counts once it
+# is deeper than this fraction of his own footprint.
+BRAM_OVERLAP_TOLERANCE = 0.12
 # All of Bram's motion is merged into this single clip so the head turn and the
 # hammer strike play together instead of as three separate animations.
 MERGED_CLIP = "Bram_Work"
@@ -212,78 +219,26 @@ def place_bram(root, members) -> None:
     ground, fire = identify_props()
     floor_z = floor_level(table, fire, ground)
 
-    t_low, t_high = world_bbox(table)
-    f_low, f_high = world_bbox(fire)
+    wanted, factor, attempts, clashes = fit_bram(root, members, table, fire, ground, floor_z)
+
+    low, high = group_bbox(root, members)
+    g_low, g_high = world_bbox(ground)
+    t_high = world_bbox(table)[1]
     table_height = t_high.z - floor_z
 
-    # Scale first, so the clearance below is computed against his final size.
-    b_low, b_high = group_bbox(root, members)
-    bram_height = max(1e-6, b_high.z - b_low.z)
-    scale = (table_height * BRAM_HEIGHT_VS_TABLE) / bram_height
-    root.scale = (scale, scale, scale)
-
-    b_low, b_high = group_bbox(root, members)
-    bram_depth = max(1e-6, b_high.y - b_low.y)
-
-    # Stand him on the line between the fire pit and the desk, then step him
-    # toward the camera so neither one overlaps him.
-    fire_centre = (f_low + f_high) / 2
-    table_centre = (t_low + t_high) / 2
-    target_x = fire_centre.x + (table_centre.x - fire_centre.x) * BRAM_ALONG
-    target_y = fire_centre.y + (table_centre.y - fire_centre.y) * BRAM_ALONG
-    target_y += FRONT * bram_depth * BRAM_CLEARANCE
-
-    root.location.x += target_x - (b_low.x + b_high.x) / 2
-    root.location.y += target_y - (b_low.y + b_high.y) / 2
-    root.location.z += floor_z - b_low.z
-    root.rotation_mode = "XYZ"
-    root.rotation_euler.z = 0.0 if FRONT < 0 else math.pi
-    bpy.context.view_layer.update()
-
-    b_low, b_high = group_bbox(root, members)
-    print("\n=== Bram placement (all measured, not hard-coded) ===")
-    print(f"  floor             z {floor_z:+.3f}")
-    print(f"  fire pit  centre  x {fire_centre.x:+.2f}  y {fire_centre.y:+.2f}")
-    print(f"  desk      centre  x {table_centre.x:+.2f}  y {table_centre.y:+.2f}  "
-          f"top z {t_high.z:+.2f}  (height {table_height:.2f})")
-    print(f"  Bram scaled       {scale:.3f} -> {table_height * BRAM_HEIGHT_VS_TABLE:.2f} tall "
-          f"({BRAM_HEIGHT_VS_TABLE:.2f} x the desk)")
-    print(f"  Bram occupies     x {b_low.x:+.2f}..{b_high.x:+.2f}  "
-          f"y {b_low.y:+.2f}..{b_high.y:+.2f}  z {b_low.z:+.2f}..{b_high.z:+.2f}")
-
-    # Overlap check, so a bad placement is visible in the log rather than only
-    # in the render.
-    def overlaps(other):
-        o_low, o_high = world_bbox(other)
-        return (b_low.x < o_high.x and b_high.x > o_low.x
-                and b_low.y < o_high.y and b_high.y > o_low.y)
-    clashes = [o.name for o in (table, fire) if overlaps(o)]
-    if clashes:
-        margin = bram_depth * 0.08
-        moved = push_clear(root, members, [table, fire], margin)
-        b_low, b_high = group_bbox(root, members)
-        clashes = [o.name for o in (table, fire) if overlaps(o)]
-        print(f"  overlapped {', '.join(clashes) or 'nothing'} -> stepped "
-              f"{moved:.3f} toward the camera")
-        print(f"  Bram now occupies x {b_low.x:+.2f}..{b_high.x:+.2f}  "
-              f"y {b_low.y:+.2f}..{b_high.y:+.2f}")
-    print(f"  footprint clash   {', '.join(clashes) if clashes else 'none — he stands clear of both'}")
-
-    # At 2.7x the desk he is big enough to walk off the diorama.
-    g_low, g_high = world_bbox(ground)
-    off = []
-    if b_low.x < g_low.x: off.append(f"{(g_low.x - b_low.x):.2f} past the -X edge")
-    if b_high.x > g_high.x: off.append(f"{(b_high.x - g_high.x):.2f} past the +X edge")
-    if b_low.y < g_low.y: off.append(f"{(g_low.y - b_low.y):.2f} past the -Y edge")
-    if b_high.y > g_high.y: off.append(f"{(b_high.y - g_high.y):.2f} past the +Y edge")
-    print(f"  on the ground plate  {'yes' if not off else 'NO — ' + ', '.join(off)}")
-
-    # He floated last time. Prove he does not, in the log.
-    gap = b_low.z - floor_z
-    verdict = ("feet on the ground" if abs(gap) < 1e-4
-               else f"FLOATING {gap * 1000:+.1f} mm" if gap > 0
-               else f"SUNK {-gap * 1000:.1f} mm")
-    print(f"  ground contact    {verdict}")
+    print("\n=== Bram placement ===")
+    if attempts:
+        print(f"  asked for {BRAM_HEIGHT_VS_TABLE:.2f} x the desk, but he did not fit between the")
+        print(f"  fire pit and the desk while staying on the plate — shrunk {attempts} time(s)")
+    print(f"  final size        {wanted:.2f} x the desk height ({table_height * wanted:.2f} units tall)")
+    print(f"  occupies          x {low.x:+.2f}..{high.x:+.2f}  y {low.y:+.2f}..{high.y:+.2f}  z {low.z:+.2f}..{high.z:+.2f}")
+    print(f"  ground plate      x {g_low.x:+.2f}..{g_high.x:+.2f}  y {g_low.y:+.2f}..{g_high.y:+.2f}")
+    on_plate = (low.x >= g_low.x and high.x <= g_high.x
+                and low.y >= g_low.y and high.y <= g_high.y)
+    print(f"  on the plate      {'yes' if on_plate else 'NO — still hanging over an edge'}")
+    print(f"  footprint clash   {', '.join(clashes) if clashes else 'none — clear of the desk and the fire pit'}")
+    gap = low.z - floor_z
+    print(f"  ground contact    {'feet on the ground' if abs(gap) < 1e-4 else f'off by {gap * 1000:+.1f} mm'}")
 
 
 def descendants(obj):
@@ -293,33 +248,75 @@ def descendants(obj):
     return out
 
 
-def push_clear(root, members, obstacles, margin: float) -> float:
-    """Step Bram toward the camera until his footprint clears the furniture.
+def fit_bram(root, members, table, fire, ground, floor_z):
+    """Size and place Bram so he stands clear of the furniture AND on the plate.
 
-    A fixed offset was not enough once he was scaled up — at 2.7x the desk he is
-    wide enough to sit inside it. This measures the actual overlap and moves him
-    only as far as it takes.
+    The previous version pushed him toward the camera until his footprint
+    stopped overlapping the desk, with nothing stopping him. At 2.7x the desk
+    his footprint is wider than the gap between the fire pit and the desk, so
+    "clear of the desk" meant standing off the edge of the diorama entirely.
+
+    Both constraints have to hold at once, and if they cannot, the thing to give
+    is his size. So: place him, clamp him onto the plate, and if he still
+    overlaps something, shrink him and try again. The log says what he ended up
+    at and why.
     """
-    moved = 0.0
-    for _ in range(60):
-        low, high = group_bbox(root, members)
-        needed = 0.0
-        for obj in obstacles:
-            o_low, o_high = world_bbox(obj)
-            overlaps_x = low.x < o_high.x + margin and high.x > o_low.x - margin
-            overlaps_y = low.y < o_high.y + margin and high.y > o_low.y - margin
-            if not (overlaps_x and overlaps_y):
-                continue
-            if FRONT < 0:
-                needed = max(needed, high.y - (o_low.y - margin))
-            else:
-                needed = max(needed, (o_high.y + margin) - low.y)
-        if needed <= 1e-5:
-            break
-        root.location.y += FRONT * needed
-        moved += needed
+    g_low, g_high = world_bbox(ground)
+    t_low, t_high = world_bbox(table)
+    f_low, f_high = world_bbox(fire)
+    fire_centre = (f_low + f_high) / 2
+    table_centre = (t_low + t_high) / 2
+    table_height = t_high.z - floor_z
+    edge = 0.04 * max(g_high.x - g_low.x, g_high.y - g_low.y)   # keep off the rim
+
+    base_low, base_high = group_bbox(root, members)
+    native_height = max(1e-6, base_high.z - base_low.z)
+
+    wanted = BRAM_HEIGHT_VS_TABLE
+    for attempt in range(14):
+        factor = (table_height * wanted) / native_height
+        root.scale = (factor, factor, factor)
+        root.location = (0.0, 0.0, 0.0)
         bpy.context.view_layer.update()
-    return moved
+
+        low, high = group_bbox(root, members)
+        depth = max(1e-6, high.y - low.y)
+        half_x = (high.x - low.x) / 2
+        half_y = depth / 2
+
+        target_x = fire_centre.x + (table_centre.x - fire_centre.x) * BRAM_ALONG
+        target_y = fire_centre.y + (table_centre.y - fire_centre.y) * BRAM_ALONG
+        target_y += FRONT * depth * BRAM_CLEARANCE
+
+        # Never let him leave the diorama, whatever the clearance asks for.
+        target_x = min(max(target_x, g_low.x + half_x + edge), g_high.x - half_x - edge)
+        target_y = min(max(target_y, g_low.y + half_y + edge), g_high.y - half_y - edge)
+
+        root.location.x += target_x - (low.x + high.x) / 2
+        root.location.y += target_y - (low.y + high.y) / 2
+        root.location.z += floor_z - low.z
+        root.rotation_mode = "XYZ"
+        root.rotation_euler.z = 0.0 if FRONT < 0 else math.pi
+        bpy.context.view_layer.update()
+
+        low, high = group_bbox(root, members)
+        # Boxes touch well before meshes do — standing right at the desk is the
+        # point. Only count an overlap once it bites into him properly.
+        tol = BRAM_OVERLAP_TOLERANCE * min(high.x - low.x, high.y - low.y)
+        clashes = []
+        for obj in (table, fire):
+            o_low, o_high = world_bbox(obj)
+            bite_x = min(high.x, o_high.x) - max(low.x, o_low.x)
+            bite_y = min(high.y, o_high.y) - max(low.y, o_low.y)
+            if bite_x > tol and bite_y > tol:
+                clashes.append(f"{obj.name} (by {min(bite_x, bite_y):.2f})")
+        if not clashes:
+            return wanted, factor, attempt, []
+        if wanted * 0.92 < BRAM_HEIGHT_VS_TABLE * BRAM_MIN_FRACTION:
+            return wanted, factor, attempt, clashes
+        wanted *= 0.92
+
+    return wanted, factor, attempt, clashes
 
 
 def align_anvil_to_strike(members, scene) -> None:
