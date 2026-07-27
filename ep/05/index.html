@@ -6,6 +6,7 @@
   <title>Lanternlight — Episode 05</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="../modes.js"></script>
   <script>
     AFRAME.registerComponent('bram-hammer', {
       init: function () {
@@ -379,199 +380,14 @@
       requestAnimationFrame(flyTick);
     }
 
-    // Wait until the A-Frame scene AND MindAR are actually ready, then start (retrying
-    // past the known 'this.ui.showLoading' race), so a single tap always works.
-    function sceneReady(){
-      return new Promise(res => { sceneEl.hasLoaded ? res() : sceneEl.addEventListener('loaded', () => res(), { once: true }); });
-    }
-    async function startAR(){
-      await sceneReady();
-      const sys = sceneEl.systems['mindar-image-system'];
-      if (!sys) throw new Error('MindAR not ready — reload the page.');
-      let lastErr;
-      for (let i = 0; i < 30; i++){
-        try { await sys.start(); return; }
-        catch (e){
-          lastErr = e;
-          if (/showLoading|ui|undefined/i.test(String(e && e.message || e))) { await new Promise(r => setTimeout(r, 200)); continue; }
-          throw e;
-        }
-      }
-      throw lastErr || new Error('MindAR did not become ready');
-    }
-
-    /* ------------------------------------------------------------------
-       Two ways to play.
-
-         AR mode      the original: MindAR opens the camera and pins the forge
-                      to the printed Sparkstone card.
-         screen mode  no camera, no card, no marker. The forge sits in front of
-                      an ordinary perspective camera and the child drags to turn
-                      it. Everything else — narration, captions, tapping Bram,
-                      the ember game, the end card — is identical, because the
-                      episode logic never cared how the rig got on screen.
-
-       mindar-image is attached at runtime rather than in the markup, so screen
-       mode never requests camera permission at all.
-    ------------------------------------------------------------------ */
-    let SCREEN_MODE = false;
-
-    /* Orbit by driving a pivot, not by writing to the camera every frame.
-
-       The first version set the camera's object3D position and quaternion
-       directly and re-asserted them on tick. That fought A-Frame's own position
-       component and depended on a guessed distance. This rotates a parent
-       entity and slides the camera along its local Z instead — plain
-       setAttribute calls that A-Frame is happy to own. */
-    const orbit = { yaw: 0, pitch: 22, radius: 6, min: 1, max: 60, cx: 0, cy: 0, cz: 0 };
-
-    function applyOrbit(){
-      const pivot = document.getElementById('camPivot');
-      const cam = pivot.querySelector('a-camera');
-      pivot.setAttribute('position', `${orbit.cx} ${orbit.cy} ${orbit.cz}`);
-      pivot.setAttribute('rotation', `${orbit.pitch} ${orbit.yaw} 0`);
-      cam.setAttribute('position', `0 0 ${orbit.radius}`);
-    }
-
-    // Point at whatever is actually there. Guessing a distance meant guessing
-    // the rig's final size — it animates from scale 0.05 to 4, so anything
-    // measured too early frames a speck and renders an empty background.
-    function frameOnRig(){
-      const box = new THREE.Box3().setFromObject(rigEl.object3D);
-      if (box.isEmpty()) return false;
-      const size = box.getSize(new THREE.Vector3());
-      const extent = Math.max(size.x, size.y, size.z);
-      if (!(extent > 0.01)) return false;
-      const centre = box.getCenter(new THREE.Vector3());
-      orbit.cx = centre.x; orbit.cy = centre.y; orbit.cz = centre.z;
-      orbit.radius = extent * 1.9;
-      orbit.min = extent * 0.6;
-      orbit.max = extent * 6;
-      applyOrbit();
-      return true;
-    }
-
-    function bindOrbitInput(){
-      const canvas = sceneEl.canvas || document.body;
-      let dragging = false, lastX = 0, lastY = 0, pinch = 0;
-      const down = (x, y) => { dragging = true; lastX = x; lastY = y; };
-      const move = (x, y) => {
-        if (!dragging) return;
-        orbit.yaw   -= (x - lastX) * 0.35;
-        orbit.pitch += (y - lastY) * 0.35;
-        orbit.pitch = Math.max(-8, Math.min(78, orbit.pitch));
-        lastX = x; lastY = y;
-        applyOrbit();
-      };
-      const up = () => { dragging = false; };
-      const zoom = (f) => {
-        orbit.radius = Math.max(orbit.min, Math.min(orbit.max, orbit.radius * f));
-        applyOrbit();
-      };
-      canvas.addEventListener('mousedown', (e) => down(e.clientX, e.clientY));
-      window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
-      window.addEventListener('mouseup', up);
-      canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom(1 + Math.sign(e.deltaY) * 0.1); }, { passive: false });
-      canvas.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 1) down(e.touches[0].clientX, e.touches[0].clientY);
-        else if (e.touches.length === 2) pinch = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-      }, { passive: true });
-      canvas.addEventListener('touchmove', (e) => {
-        if (e.touches.length === 1) move(e.touches[0].clientX, e.touches[0].clientY);
-        else if (e.touches.length === 2 && pinch) {
-          const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                               e.touches[0].clientY - e.touches[1].clientY);
-          zoom(pinch / d); pinch = d;
-        }
-      }, { passive: true });
-      canvas.addEventListener('touchend', () => { up(); pinch = 0; }, { passive: true });
-    }
-
-    async function startScreenMode(){
-      SCREEN_MODE = true;
-      await sceneReady();
-
-      // The anchor never gets the mindar component, so it stays a plain holder
-      // at the origin and stays visible. Undo the "lie flat on the card"
-      // rotation so the forge stands upright in front of the camera.
-      targetEl.object3D.visible = true;
-      rigEl.setAttribute('rotation', '0 0 0');
-
-      sceneEl.setAttribute('background', 'color: #140f0c');
-      bindOrbitInput();
-      applyOrbit();
-
-      startEl.style.display = 'none';
-      chapterEl.style.display = 'block';
-      hintEl.style.display = 'none';
-
-      // No card to find, so go straight to the reveal.
-      revealScene();
-
-      // The rig grows from scale 0.05 to 4 over 1.4s and the model may still be
-      // downloading, so keep re-framing until there is something to frame.
-      let framed = false;
-      const settle = setInterval(() => { if (frameOnRig()) framed = true; }, 300);
-      setTimeout(() => {
-        clearInterval(settle);
-        if (!framed) {
-          document.getElementById('err').textContent =
-            'The forge did not load — check the console for a failed scene5.glb.';
-          startEl.style.display = 'flex';
-        }
-      }, 6000);
-    }
-
-    startBtn.addEventListener('click', async () => {
-      startBtn.textContent = 'Starting…';
-      document.getElementById('err').textContent = '';
-      await unlockAudio();
-      try {
-        sceneEl.setAttribute('mindar-image',
-          'imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; ' +
-          'filterBeta: 5; missTolerance: 5; warmupTolerance: 5;');
-        await sceneReady();
-        targetEl.setAttribute('mindar-image-target', 'targetIndex: 0');
-        await startAR();
-        startEl.style.display = 'none';
-        hintEl.style.display = 'block';
-        chapterEl.style.display = 'block';
-      } catch (err) {
-        startBtn.textContent = 'Tap to retry';
-        document.getElementById('err').textContent = 'Could not start: ' + (err.message || err) +
-          ' — you can still play on screen.';
-      }
-    });
-
-    document.getElementById('screenBtn').addEventListener('click', async () => {
-      await unlockAudio();
-      try { await startScreenMode(); }
-      catch (err) { document.getElementById('err').textContent = 'Could not start: ' + (err.message || err); }
-    });
-
-    /* Unlock the media elements inside the click, and WAIT for it.
-
-       This used to fire and forget. Each element is played muted, then paused
-       again once that promise resolves — so if anything called music.play()
-       before the promise landed, the unlock's own pause() arrived afterwards and
-       silenced it. In AR that never showed up, because starting the camera and
-       finding the marker takes seconds. Screen mode goes straight from the click
-       to revealScene(), so the pause always won and the episode played silent. */
-    function unlockAudio(){
-      return Promise.all([music, introVid, narration].map(a => {
-        a.muted = true;
-        const p = a.play();
-        if (!p) { a.muted = false; return Promise.resolve(); }
-        return p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; })
-                .catch(() => { a.muted = false; });
-      }));
-    }
+    // Two ways to play — AR with the printed card, or on screen with no
+    // camera at all. Both entry points live in ../modes.js.
+    LL.install({ targets: '../01/targets.mind?v=2', reveal: revealScene });
 
     const rigEl = document.getElementById('rig');
     let pinchStart = 0, rigScale = 4;
     document.addEventListener('touchmove', (e) => {
-      if (SCREEN_MODE) return;          // screen-orbit owns pinch in that mode
+      if (LL.screenMode) return;          // screen-orbit owns pinch in that mode
       if (e.touches.length === 2) {
         e.preventDefault();
         const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
@@ -582,7 +398,7 @@
       }
     }, { passive: false });
     document.addEventListener('touchend', (e) => {
-      if (SCREEN_MODE) return;
+      if (LL.screenMode) return;
       if (e.touches.length < 2 && pinchStart) { rigScale = parseFloat(rigEl.dataset.scale) || rigScale; pinchStart = 0; }
     });
 
