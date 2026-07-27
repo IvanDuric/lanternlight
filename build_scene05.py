@@ -454,18 +454,30 @@ def main() -> None:
     # watt-derived candela and blow out the diorama in three.js, exactly as they
     # did in Episode 4, so they are left behind and the page lights the scene.
     GLB_OUT.parent.mkdir(parents=True, exist_ok=True)
-    bpy.ops.export_scene.gltf(
+    options = dict(
         filepath=str(GLB_OUT),
         export_format="GLB",
         export_animations=True,
         export_force_sampling=True,
-        export_nla_strips=True,
         export_frame_range=False,
         export_cameras=False,
         export_lights=False,
         export_draco_mesh_compression_enable=True,
         export_draco_mesh_compression_level=6,
     )
+
+    # Putting every action on an identically named NLA track is only half the
+    # job: export_nla_strips is deprecated in current Blender and ignored, so the
+    # exporter fell back to one glTF animation per ACTION and Bram came out with
+    # three clips again. export_animation_mode="NLA_TRACKS" is what actually
+    # groups them, but it does not exist in older builds — hence the fallback.
+    try:
+        bpy.ops.export_scene.gltf(export_animation_mode="NLA_TRACKS", **options)
+        print("Export: animations grouped by NLA track (one merged clip)")
+    except TypeError:
+        bpy.ops.export_scene.gltf(export_nla_strips=True, **options)
+        print("Export: this Blender has no export_animation_mode; clips stay "
+              "separate and the page plays them together instead")
     size = GLB_OUT.stat().st_size / 1e6
     print(f"\nExported {GLB_OUT.relative_to(ROOT_DIR)}  {size:.1f} MB (Draco on, lights and camera dropped)")
     print("Next: .venv/bin/python optimize_scene4_glb.py ep/05/scene5.glb")

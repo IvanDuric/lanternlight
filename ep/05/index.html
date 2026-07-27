@@ -15,7 +15,11 @@
         this.pendingStart = false;
         this.el.addEventListener('model-loaded', (event) => {
           const model = event.detail.model;
-          const clips = model.animations.filter(clip => clip.name.startsWith('BramHammer') || clip.name === 'BramHead');
+          // build_scene05.py merges the three clips into one so the head turn
+          // and the strike play together; older hero.glb files still have them
+          // split, so both spellings are accepted.
+          const clips = model.animations.filter(clip =>
+            clip.name === 'Bram_Work' || clip.name.startsWith('BramHammer') || clip.name === 'BramHead');
           if (!clips.length && model.animations[0]) clips.push(model.animations[0]);
           if (!clips.length) return;
           this.mixer = new THREE.AnimationMixer(model);
@@ -109,12 +113,20 @@
     vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
 
     <a-assets>
-      <a-asset-item id="sceneModel" src="../01/scene.glb"></a-asset-item>
-      <a-asset-item id="heroModel"  src="./hero.glb?v=connected-strike-4"></a-asset-item>
+      <!-- Scene_05.blend, built by build_scene05.py. Bram is inside it now, so
+           there is no separate hero model to load or place. -->
+      <a-asset-item id="sceneModel" src="./scene5.glb?v=forge-1"></a-asset-item>
       <video id="introVid" src="./intro.mp4" preload="auto" playsinline webkit-playsinline muted crossorigin="anonymous"></video>
     </a-assets>
 
-    <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+    <!-- The camera lives inside a pivot. In AR mode the pivot stays at identity,
+         so MindAR still gets a camera at the origin and behaves exactly as
+         before. Screen mode orbits by rotating the pivot and sliding the camera
+         out along its own Z — all through A-Frame's position/rotation
+         components, so nothing fights over the transform. -->
+    <a-entity id="camPivot" position="0 0 0" rotation="0 0 0">
+      <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+    </a-entity>
 
     <!-- Bram begins in the light; the tap starts his activity. -->
     <a-entity id="ambient" light="type: ambient; intensity: 0.9; color: #eaf1ff"></a-entity>
@@ -131,7 +143,8 @@
       <a-entity id="rig" rotation="90 0 0" visible="false" scale="0.05 0.05 0.05"
                 animation__grow="property: scale; from: 0.05 0.05 0.05; to: 4 4 4; dur: 1400; easing: easeOutBack; startEvents: reveal">
 
-        <a-gltf-model id="diorama" src="#sceneModel" position="0 0 0" rotation="0 0 0" scale="0.7 0.7 0.7"></a-gltf-model>
+        <a-gltf-model id="diorama" src="#sceneModel" position="0 0 0" rotation="0 0 0" scale="0.7 0.7 0.7"
+                      class="clickable" bram-hammer></a-gltf-model>
 
         <a-circle id="portal" radius="0.5" color="#ffcf6b" opacity="0.2" position="0 0.01 0" rotation="-90 0 0"
                   material="shader: flat; transparent: true"
@@ -150,12 +163,9 @@
                   animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.2; to: 0.65; dur: 1100; easing: easeInOutSine; startEvents: reveal"
                   animation__s="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.35 1.35 1.35; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-sphere>
 
-        <!-- HERO character -->
-        <a-gltf-model id="hero" src="#heroModel" position="0 0 0" rotation="0 0 0" scale="0.38 0.38 0.38"
-                      class="clickable" bram-hammer
-                      animation__rise="property: position; from: 0 -0.12 0; to: 0 0 0; dur: 900; easing: easeOutCubic; startEvents: reveal"
-                      animation__bob="property: position; dir: alternate; loop: true; from: 0 0 0; to: 0 0.03 0; dur: 2200; easing: easeInOutSine; delay: 900; startEvents: reveal">
-        </a-gltf-model>
+        <!-- Bram is authored into scene5.glb at his own scale and position, so
+           there is no separate hero entity. bram-hammer sits on the diorama
+           and finds his clips inside the combined model. -->
 
         <a-entity id="fireflies"></a-entity>
       </a-entity>
@@ -172,7 +182,30 @@
     const music = document.getElementById('music');
     const narration = document.getElementById('narration');
     const targetEl = document.getElementById('anchor');
-    const heroEl = document.getElementById('hero');
+    const heroEl = document.getElementById('diorama');
+
+    /* Bram no longer has his own entity — he is a node inside scene5.glb. Find
+       him by name and hit-test against his bounding-box centre, because the
+       node origin sits on the floor well below the beetle you actually tap. */
+    let bramNode = null, bramLocalCentre = null;
+    heroEl.addEventListener('model-loaded', (e) => {
+      const model = e.detail.model;
+      bramNode = model.getObjectByName('Bram_HeadRig')
+              || model.getObjectByName('Bram_HammerSwing_X')
+              || model.getObjectByName('ROOT');
+      if (!bramNode) {
+        model.traverse((n) => { if (!bramNode && /bram/i.test(n.name)) bramNode = n; });
+      }
+      if (bramNode) {
+        const centre = new THREE.Box3().setFromObject(bramNode).getCenter(new THREE.Vector3());
+        bramLocalCentre = bramNode.worldToLocal(centre);
+      }
+    });
+    function bramWorldPoint(){
+      if (!bramNode) return null;
+      return bramLocalCentre ? bramNode.localToWorld(bramLocalCentre.clone())
+                             : bramNode.getWorldPosition(new THREE.Vector3());
+    }
     const introVid = document.getElementById('introVid');
     const introPlane = document.getElementById('introPlane');
     const blackout = document.getElementById('blackout');
@@ -240,7 +273,7 @@
       }
     }
     function finale(){
-      heroEl.setAttribute('animation__cheer', 'property: scale; dir: alternate; loop: 3; from: 0.38 0.38 0.38; to: 0.48 0.48 0.48; dur: 240; easing: easeInOutSine');
+      heroEl.setAttribute('animation__cheer', 'property: scale; dir: alternate; loop: 3; from: 0.7 0.7 0.7; to: 0.74 0.74 0.74; dur: 240; easing: easeInOutSine');
       document.getElementById('lanternGlow').setAttribute('animation__bloom', 'property: light.intensity; to: 2.0; dur: 1000; easing: easeOutCubic');
       document.getElementById('ambient').setAttribute('animation__bright', 'property: light.intensity; to: 1.2; dur: 1000');
       showBanner('The forge roars to life ✨', 2600);
@@ -368,87 +401,77 @@
     ------------------------------------------------------------------ */
     let SCREEN_MODE = false;
 
-    // Drag to orbit, wheel or pinch to zoom. Written inline rather than pulling
-    // in an orbit-controls package for one screen.
-    AFRAME.registerComponent('screen-orbit', {
-      schema: { radius: {default: 5.5}, minRadius: {default: 2.0}, maxRadius: {default: 16} },
-      init: function () {
-        this.yaw = 0; this.pitch = 0.42; this.radius = this.data.radius;
-        this.target = new THREE.Vector3(0, 1.2, 0);   // eye level for a rig 2.8 units tall
-        this.dragging = false; this.lastX = 0; this.lastY = 0; this.pinch = 0;
-        const canvas = this.el.sceneEl.canvas || document.body;
+    /* Orbit by driving a pivot, not by writing to the camera every frame.
 
-        this.onDown = (x, y) => { this.dragging = true; this.lastX = x; this.lastY = y; };
-        this.onMove = (x, y) => {
-          if (!this.dragging) return;
-          this.yaw   -= (x - this.lastX) * 0.006;
-          this.pitch -= (y - this.lastY) * 0.006;
-          this.pitch = Math.max(-0.15, Math.min(1.35, this.pitch));
-          this.lastX = x; this.lastY = y;
-          this.apply();
-        };
-        this.onUp = () => { this.dragging = false; };
-        this.zoom = (delta) => {
-          this.radius = Math.max(this.data.minRadius, Math.min(this.data.maxRadius, this.radius * delta));
-          this.apply();
-        };
+       The first version set the camera's object3D position and quaternion
+       directly and re-asserted them on tick. That fought A-Frame's own position
+       component and depended on a guessed distance. This rotates a parent
+       entity and slides the camera along its local Z instead — plain
+       setAttribute calls that A-Frame is happy to own. */
+    const orbit = { yaw: 0, pitch: 22, radius: 6, min: 1, max: 60, cx: 0, cy: 0, cz: 0 };
 
-        canvas.addEventListener('mousedown', (e) => this.onDown(e.clientX, e.clientY));
-        window.addEventListener('mousemove', (e) => this.onMove(e.clientX, e.clientY));
-        window.addEventListener('mouseup', this.onUp);
-        canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.zoom(1 + Math.sign(e.deltaY) * 0.09); }, { passive: false });
-        canvas.addEventListener('touchstart', (e) => {
-          if (e.touches.length === 1) this.onDown(e.touches[0].clientX, e.touches[0].clientY);
-          else if (e.touches.length === 2) this.pinch = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-        }, { passive: true });
-        canvas.addEventListener('touchmove', (e) => {
-          if (e.touches.length === 1) this.onMove(e.touches[0].clientX, e.touches[0].clientY);
-          else if (e.touches.length === 2 && this.pinch) {
-            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                                 e.touches[0].clientY - e.touches[1].clientY);
-            this.zoom(this.pinch / d); this.pinch = d;
-          }
-        }, { passive: true });
-        canvas.addEventListener('touchend', () => { this.onUp(); this.pinch = 0; }, { passive: true });
+    function applyOrbit(){
+      const pivot = document.getElementById('camPivot');
+      const cam = pivot.querySelector('a-camera');
+      pivot.setAttribute('position', `${orbit.cx} ${orbit.cy} ${orbit.cz}`);
+      pivot.setAttribute('rotation', `${orbit.pitch} ${orbit.yaw} 0`);
+      cam.setAttribute('position', `0 0 ${orbit.radius}`);
+    }
 
-        this.apply();
-      },
-      apply: function () {
-        const p = this.el.object3D.position;
-        p.set(
-          this.target.x + this.radius * Math.cos(this.pitch) * Math.sin(this.yaw),
-          this.target.y + this.radius * Math.sin(this.pitch),
-          this.target.z + this.radius * Math.cos(this.pitch) * Math.cos(this.yaw)
-        );
-        this.el.object3D.lookAt(this.target);
-      },
+    // Point at whatever is actually there. Guessing a distance meant guessing
+    // the rig's final size — it animates from scale 0.05 to 4, so anything
+    // measured too early frames a speck and renders an empty background.
+    function frameOnRig(){
+      const box = new THREE.Box3().setFromObject(rigEl.object3D);
+      if (box.isEmpty()) return false;
+      const size = box.getSize(new THREE.Vector3());
+      const extent = Math.max(size.x, size.y, size.z);
+      if (!(extent > 0.01)) return false;
+      const centre = box.getCenter(new THREE.Vector3());
+      orbit.cx = centre.x; orbit.cy = centre.y; orbit.cz = centre.z;
+      orbit.radius = extent * 1.9;
+      orbit.min = extent * 0.6;
+      orbit.max = extent * 6;
+      applyOrbit();
+      return true;
+    }
 
-      /* Point the camera at whatever is actually there.
-
-         Guessing an orbit distance meant guessing the rig's final size: it
-         starts at scale 0.05 and animates to 4, and if that animation had not
-         finished — or had not run — the camera sat 5.5 units away from a speck
-         and rendered an empty background. Measuring the real bounding box
-         removes the guess entirely. */
-      frameOn: function (object3D) {
-        const box = new THREE.Box3().setFromObject(object3D);
-        if (box.isEmpty()) return false;
-        const size = box.getSize(new THREE.Vector3());
-        const extent = Math.max(size.x, size.y, size.z);
-        if (!(extent > 0.001)) return false;      // still a speck; try again later
-        box.getCenter(this.target);
-        this.radius = extent * 1.8;
-        this.data.minRadius = extent * 0.5;
-        this.data.maxRadius = extent * 6;
-        this.apply();
-        return true;
-      },
-
-      // Re-assert every frame. The position component, and anything else that
-      // writes to the camera transform, would otherwise silently win.
-      tick: function () { this.apply(); }
-    });
+    function bindOrbitInput(){
+      const canvas = sceneEl.canvas || document.body;
+      let dragging = false, lastX = 0, lastY = 0, pinch = 0;
+      const down = (x, y) => { dragging = true; lastX = x; lastY = y; };
+      const move = (x, y) => {
+        if (!dragging) return;
+        orbit.yaw   -= (x - lastX) * 0.35;
+        orbit.pitch += (y - lastY) * 0.35;
+        orbit.pitch = Math.max(-8, Math.min(78, orbit.pitch));
+        lastX = x; lastY = y;
+        applyOrbit();
+      };
+      const up = () => { dragging = false; };
+      const zoom = (f) => {
+        orbit.radius = Math.max(orbit.min, Math.min(orbit.max, orbit.radius * f));
+        applyOrbit();
+      };
+      canvas.addEventListener('mousedown', (e) => down(e.clientX, e.clientY));
+      window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
+      window.addEventListener('mouseup', up);
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoom(1 + Math.sign(e.deltaY) * 0.1); }, { passive: false });
+      canvas.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) down(e.touches[0].clientX, e.touches[0].clientY);
+        else if (e.touches.length === 2) pinch = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      }, { passive: true });
+      canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1) move(e.touches[0].clientX, e.touches[0].clientY);
+        else if (e.touches.length === 2 && pinch) {
+          const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                               e.touches[0].clientY - e.touches[1].clientY);
+          zoom(pinch / d); pinch = d;
+        }
+      }, { passive: true });
+      canvas.addEventListener('touchend', () => { up(); pinch = 0; }, { passive: true });
+    }
 
     async function startScreenMode(){
       SCREEN_MODE = true;
@@ -460,9 +483,9 @@
       targetEl.object3D.visible = true;
       rigEl.setAttribute('rotation', '0 0 0');
 
-      const cam = document.querySelector('a-camera');
-      cam.setAttribute('screen-orbit', '');
       sceneEl.setAttribute('background', 'color: #140f0c');
+      bindOrbitInput();
+      applyOrbit();
 
       startEl.style.display = 'none';
       chapterEl.style.display = 'block';
@@ -471,23 +494,18 @@
       // No card to find, so go straight to the reveal.
       revealScene();
 
-      // The rig grows from scale 0.05 to 4 over 1.4s. Re-frame while that runs
-      // so the shot is correct however big it ends up, and keep trying for a
-      // few seconds in case the model is still downloading.
-      const orbit = cam.components['screen-orbit'];
-      const rigObject = rigEl.object3D;
+      // The rig grows from scale 0.05 to 4 over 1.4s and the model may still be
+      // downloading, so keep re-framing until there is something to frame.
       let framed = false;
-      const settle = setInterval(() => {
-        if (orbit && orbit.frameOn(rigObject)) framed = true;
-      }, 400);
+      const settle = setInterval(() => { if (frameOnRig()) framed = true; }, 300);
       setTimeout(() => {
         clearInterval(settle);
         if (!framed) {
           document.getElementById('err').textContent =
-            'The forge did not load — check the console for a failed scene.glb.';
+            'The forge did not load — check the console for a failed scene5.glb.';
           startEl.style.display = 'flex';
         }
-      }, 4000);
+      }, 6000);
     }
 
     startBtn.addEventListener('click', async () => {
@@ -550,7 +568,7 @@
       requestAnimationFrame(() => {
         blackout.style.transition = 'opacity 1.1s';
         blackout.style.opacity = 0;
-        ['rig','hero','portal','lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.emit('reveal'); });
+        ['rig','diorama','portal','lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.emit('reveal'); });
 
         // The bed used to be PAUSED here, which is why the scene was silent until
         // the child tapped Bram. Keep it running and duck it under the narration.
@@ -592,8 +610,8 @@
       const source = ev.detail && ev.detail.mouseEvent ? ev.detail.mouseEvent : ev;
       if (!Number.isFinite(source.clientX) || !Number.isFinite(source.clientY)) return false;
       const rect = sceneEl.canvas.getBoundingClientRect();
-      const point = new THREE.Vector3();
-      character.object3D.getWorldPosition(point); point.project(sceneEl.camera);
+      const point = bramWorldPoint() || character.object3D.getWorldPosition(new THREE.Vector3());
+      point.project(sceneEl.camera);
       const x = rect.left + (point.x * 0.5 + 0.5) * rect.width;
       const y = rect.top + (-point.y * 0.5 + 0.5) * rect.height;
       return Math.hypot(x - source.clientX, y - source.clientY) <= radius;
