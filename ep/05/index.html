@@ -48,8 +48,10 @@
     #start .kicker { letter-spacing: 3px; font-size: 13px; opacity:.8; }
     #start h1 { font-size: 24px; letter-spacing: 1px; margin: 6px 0 10px; }
     #start p  { max-width: 300px; opacity: .85; line-height: 1.5; margin: 0; }
-    #start button { margin-top: 22px; padding: 14px 30px; font-size: 18px; font-weight: 700;
-      border: none; border-radius: 12px; background: #d64b3a; color: white; }
+    #start button { margin-top: 14px; padding: 14px 30px; font-size: 17px; font-weight: 700;
+      border: none; border-radius: 12px; background: #d64b3a; color: white; min-width: 262px; }
+    #start button.ghost { background: transparent; color: #ece7e1; border: 1px solid #6a5f52; font-weight: 600; }
+    #start .fine { margin-top: 16px; font-size: 12.5px; opacity: .6; max-width: 280px; line-height: 1.45; }
     #hint { position: fixed; bottom: 22px; left: 0; right: 0; z-index: 50; text-align: center;
       color: #fff; text-shadow: 0 1px 4px #000; font-size: 15px; pointer-events: none; }
     #caption { position: fixed; bottom: 8%; left: 0; right: 0; z-index: 60; text-align: center;
@@ -64,8 +66,10 @@
   <div id="start">
     <div class="kicker">LANTERNLIGHT · 05 / 10</div>
     <h1>The Firefly Forge</h1>
-    <p>Point your camera at your Sparkstone card, then tap Bram to light the forge. Sound on 🔊</p>
-    <button id="startBtn">Tap to begin</button>
+    <p>Tap Bram to light the forge. Sound on 🔊</p>
+    <button id="startBtn">Use my Sparkstone card 📷</button>
+    <button id="screenBtn" class="ghost">Play on screen — no card 🖥️</button>
+    <p class="fine">Screen mode needs no camera and no printed card. Drag to turn the forge, pinch or scroll to zoom.</p>
     <p id="err" style="color:#ffb4a8; font-size:13px; margin-top:14px; max-width:300px;"></p>
   </div>
 
@@ -97,8 +101,9 @@
   <audio id="music" src="./music.mp3" preload="auto" loop></audio>
   <audio id="narration" src="./narration.mp3" preload="auto"></audio>
 
+  <!-- mindar-image is NOT set here. It is attached at runtime only when the child
+       picks the AR card, so screen mode never opens the camera at all. -->
   <a-scene
-    mindar-image="imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; filterBeta: 5; missTolerance: 5; warmupTolerance: 5;"
     gltf-model="dracoDecoderPath: https://www.gstatic.com/draco/v1/decoders/"
     color-space="sRGB" renderer="colorManagement: true, physicallyCorrectLights: true, exposure: 1.1"
     vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
@@ -344,24 +349,135 @@
       throw lastErr || new Error('MindAR did not become ready');
     }
 
+    /* ------------------------------------------------------------------
+       Two ways to play.
+
+         AR mode      the original: MindAR opens the camera and pins the forge
+                      to the printed Sparkstone card.
+         screen mode  no camera, no card, no marker. The forge sits in front of
+                      an ordinary perspective camera and the child drags to turn
+                      it. Everything else — narration, captions, tapping Bram,
+                      the ember game, the end card — is identical, because the
+                      episode logic never cared how the rig got on screen.
+
+       mindar-image is attached at runtime rather than in the markup, so screen
+       mode never requests camera permission at all.
+    ------------------------------------------------------------------ */
+    let SCREEN_MODE = false;
+
+    // Drag to orbit, wheel or pinch to zoom. Written inline rather than pulling
+    // in an orbit-controls package for one screen.
+    AFRAME.registerComponent('screen-orbit', {
+      schema: { radius: {default: 5.5}, minRadius: {default: 2.0}, maxRadius: {default: 16} },
+      init: function () {
+        this.yaw = 0; this.pitch = 0.42; this.radius = this.data.radius;
+        this.target = new THREE.Vector3(0, 1.2, 0);   // eye level for a rig 2.8 units tall
+        this.dragging = false; this.lastX = 0; this.lastY = 0; this.pinch = 0;
+        const canvas = this.el.sceneEl.canvas || document.body;
+
+        this.onDown = (x, y) => { this.dragging = true; this.lastX = x; this.lastY = y; };
+        this.onMove = (x, y) => {
+          if (!this.dragging) return;
+          this.yaw   -= (x - this.lastX) * 0.006;
+          this.pitch -= (y - this.lastY) * 0.006;
+          this.pitch = Math.max(-0.15, Math.min(1.35, this.pitch));
+          this.lastX = x; this.lastY = y;
+          this.apply();
+        };
+        this.onUp = () => { this.dragging = false; };
+        this.zoom = (delta) => {
+          this.radius = Math.max(this.data.minRadius, Math.min(this.data.maxRadius, this.radius * delta));
+          this.apply();
+        };
+
+        canvas.addEventListener('mousedown', (e) => this.onDown(e.clientX, e.clientY));
+        window.addEventListener('mousemove', (e) => this.onMove(e.clientX, e.clientY));
+        window.addEventListener('mouseup', this.onUp);
+        canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.zoom(1 + Math.sign(e.deltaY) * 0.09); }, { passive: false });
+        canvas.addEventListener('touchstart', (e) => {
+          if (e.touches.length === 1) this.onDown(e.touches[0].clientX, e.touches[0].clientY);
+          else if (e.touches.length === 2) this.pinch = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        }, { passive: true });
+        canvas.addEventListener('touchmove', (e) => {
+          if (e.touches.length === 1) this.onMove(e.touches[0].clientX, e.touches[0].clientY);
+          else if (e.touches.length === 2 && this.pinch) {
+            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                                 e.touches[0].clientY - e.touches[1].clientY);
+            this.zoom(this.pinch / d); this.pinch = d;
+          }
+        }, { passive: true });
+        canvas.addEventListener('touchend', () => { this.onUp(); this.pinch = 0; }, { passive: true });
+
+        this.apply();
+      },
+      apply: function () {
+        const p = this.el.object3D.position;
+        p.set(
+          this.target.x + this.radius * Math.cos(this.pitch) * Math.sin(this.yaw),
+          this.target.y + this.radius * Math.sin(this.pitch),
+          this.target.z + this.radius * Math.cos(this.pitch) * Math.cos(this.yaw)
+        );
+        this.el.object3D.lookAt(this.target);
+      }
+    });
+
+    async function startScreenMode(){
+      SCREEN_MODE = true;
+      await sceneReady();
+
+      // The target entity does nothing without MindAR, so it simply becomes a
+      // plain holder sitting at the origin. Undo the "lie flat on the card"
+      // rotation so the forge stands upright in front of the camera.
+      const targetHolder = document.querySelector('[mindar-image-target]');
+      if (targetHolder) targetHolder.removeAttribute('mindar-image-target');
+      rigEl.setAttribute('rotation', '0 0 0');
+
+      const cam = document.querySelector('a-camera');
+      cam.setAttribute('screen-orbit', '');
+      sceneEl.setAttribute('background', 'color: #140f0c');
+
+      startEl.style.display = 'none';
+      chapterEl.style.display = 'block';
+      hintEl.style.display = 'none';
+
+      // No card to find, so go straight to the reveal.
+      revealScene();
+    }
+
     startBtn.addEventListener('click', async () => {
       startBtn.textContent = 'Starting…';
       document.getElementById('err').textContent = '';
-      [music, introVid, narration].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
+      unlockAudio();
       try {
+        sceneEl.setAttribute('mindar-image',
+          'imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; ' +
+          'filterBeta: 5; missTolerance: 5; warmupTolerance: 5;');
         await startAR();
         startEl.style.display = 'none';
         hintEl.style.display = 'block';
         chapterEl.style.display = 'block';
       } catch (err) {
         startBtn.textContent = 'Tap to retry';
-        document.getElementById('err').textContent = 'Could not start: ' + (err.message || err);
+        document.getElementById('err').textContent = 'Could not start: ' + (err.message || err) +
+          ' — you can still play on screen.';
       }
     });
+
+    document.getElementById('screenBtn').addEventListener('click', async () => {
+      unlockAudio();
+      try { await startScreenMode(); }
+      catch (err) { document.getElementById('err').textContent = 'Could not start: ' + (err.message || err); }
+    });
+
+    function unlockAudio(){
+      [music, introVid, narration].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
+    }
 
     const rigEl = document.getElementById('rig');
     let pinchStart = 0, rigScale = 4;
     document.addEventListener('touchmove', (e) => {
+      if (SCREEN_MODE) return;          // screen-orbit owns pinch in that mode
       if (e.touches.length === 2) {
         e.preventDefault();
         const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
@@ -372,6 +488,7 @@
       }
     }, { passive: false });
     document.addEventListener('touchend', (e) => {
+      if (SCREEN_MODE) return;
       if (e.touches.length < 2 && pinchStart) { rigScale = parseFloat(rigEl.dataset.scale) || rigScale; pinchStart = 0; }
     });
 

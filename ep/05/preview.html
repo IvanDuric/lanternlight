@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scene 5 preview — the forge</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; background:#1a1512; color:#ece7e1; font-family: system-ui, sans-serif; }
+    header { padding:14px 18px 10px; }
+    header h1 { margin:0; font-size:17px; letter-spacing:.5px; }
+    header p { margin:5px 0 0; font-size:13px; opacity:.7; }
+    model-viewer { width:100vw; height:calc(100vh - 132px); background:#241d18; }
+    .bar { display:flex; gap:8px; padding:10px 18px; flex-wrap:wrap; align-items:center; }
+    button, select {
+      background:#33291f; color:#ece7e1; border:1px solid #5a4a3a; border-radius:9px;
+      padding:8px 13px; font-size:13px; font-family:inherit;
+    }
+    button.on { background:#d64b3a; border-color:#d64b3a; }
+    #stats { font-size:12px; opacity:.65; margin-left:auto; text-align:right; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Scene 5 — the forge, with Bram at the table</h1>
+    <p>Drag to orbit · scroll to zoom · this is a plain 3D preview, not the AR episode</p>
+  </header>
+
+  <model-viewer id="mv"
+    src="./scene5.glb"
+    alt="Episode 5 forge scene"
+    camera-controls
+    autoplay
+    shadow-intensity="0.9"
+    exposure="1.05"
+    environment-image="neutral"
+    camera-orbit="35deg 72deg auto"
+    max-camera-orbit="Infinity 179deg auto"
+    min-field-of-view="8deg">
+  </model-viewer>
+
+  <div class="bar">
+    <button id="play" class="on">Pause animation</button>
+    <select id="clip"><option>all clips</option></select>
+    <button id="reset">Reset view</button>
+    <button id="top">Top-down</button>
+    <button id="front">Front (camera side)</button>
+    <div id="stats">loading…</div>
+  </div>
+
+  <script type="module">
+    const mv = document.getElementById('mv');
+    const playBtn = document.getElementById('play');
+    const clipSel = document.getElementById('clip');
+    const stats = document.getElementById('stats');
+
+    mv.addEventListener('load', async () => {
+      const names = mv.availableAnimations || [];
+      clipSel.innerHTML = '';
+      // model-viewer plays one clip at a time; Bram's three run together in the
+      // episode, so "all clips" here just means whichever is selected loops.
+      names.forEach((n) => {
+        const o = document.createElement('option');
+        o.value = n; o.textContent = n; clipSel.appendChild(o);
+      });
+      if (names.length) { mv.animationName = names[0]; mv.play(); }
+
+      let bytes = 0;
+      try {
+        const head = await fetch('./scene5.glb', { method: 'HEAD' });
+        bytes = Number(head.headers.get('content-length') || 0);
+      } catch (e) { /* file:// gives nothing; not important */ }
+      stats.innerHTML =
+        (bytes ? (bytes / 1e6).toFixed(2) + ' MB<br>' : '') +
+        names.length + ' animation clip' + (names.length === 1 ? '' : 's') +
+        (names.length ? '<br>' + names.join(', ') : '');
+    });
+
+    mv.addEventListener('error', () => {
+      stats.textContent = 'scene5.glb not found — run build_scene05.py first';
+    });
+
+    playBtn.addEventListener('click', () => {
+      const on = playBtn.classList.toggle('on');
+      playBtn.textContent = on ? 'Pause animation' : 'Play animation';
+      on ? mv.play() : mv.pause();
+    });
+    clipSel.addEventListener('change', () => {
+      mv.animationName = clipSel.value;
+      if (playBtn.classList.contains('on')) mv.play();
+    });
+    document.getElementById('reset').addEventListener('click', () => {
+      mv.cameraOrbit = '35deg 72deg auto'; mv.fieldOfView = 'auto';
+    });
+    document.getElementById('top').addEventListener('click', () => {
+      mv.cameraOrbit = '0deg 8deg auto';
+    });
+    document.getElementById('front').addEventListener('click', () => {
+      // Blender -Y is the camera side of the diorama, which is 180deg here.
+      mv.cameraOrbit = '180deg 80deg auto';
+    });
+  </script>
+</body>
+</html>
