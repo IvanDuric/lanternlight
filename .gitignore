@@ -1,0 +1,42 @@
+# Lanternlight — what gets published.
+#
+# The repo is the deployed site (GitHub Pages), not the studio. Everything the
+# browser loads lives under ep/, menu/ and index.html, which is about 21 MB.
+# The Blender sources, print PDFs and raw footage are another 230 MB and are
+# regenerable, so they stay on the Mac.
+#
+# ep/04/scene4_final.glb is rebuilt from Scene4_Final.blend by:
+#     Blender --background Scene4_Final.blend --python animate_scene4_final.py
+#     .venv/bin/python optimize_scene4_glb.py
+
+# --- Blender sources and autosaves -------------------------------------------
+*.blend
+*.blend1
+
+# --- print-ready card artwork -------------------------------------------------
+*.pdf
+
+# --- working files at the project root ---------------------------------------
+# Anchored with a leading slash so episode assets under ep/ are still published.
+/01.mp4
+/*.glb
+/*.png
+/*.mind
+/prologue.mp3
+/.narration_parts/
+
+# --- python ------------------------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+
+# --- scratch -----------------------------------------------------------------
+ep/**/_*.wav
+*.orig.glb
+
+# --- macOS -------------------------------------------------------------------
+.DS_Store
+.Rhistory
+
+# byte-identical duplicate of ep/02/hero.glb, referenced by nothing
+ep/02/momo.glb

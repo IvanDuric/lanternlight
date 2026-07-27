@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Lanternlight</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background:#1a1512; color:#ece7e1; }
+    /* Start gate */
+    #start { position: fixed; inset: 0; z-index: 100; display:flex; flex-direction:column; align-items:center;
+      justify-content:center; text-align:center; padding:24px; background:#1a1512; }
+    #start .kicker { letter-spacing:3px; font-size:13px; opacity:.8; }
+    #start h1 { font-size:30px; letter-spacing:1px; margin:8px 0 8px; }
+    #start p { max-width:300px; opacity:.85; line-height:1.5; margin:0; }
+    #start button { margin-top:24px; padding:15px 34px; font-size:18px; font-weight:700; border:none;
+      border-radius:14px; background:#d64b3a; color:#fff; }
+    /* Prologue: the camera fills the phone, but the film and title stay attached to the physical card. */
+    #prologue { display:none; position:fixed; inset:0; z-index:200; background:#000; }
+    #prologueScene { position:absolute; inset:0; width:100%; height:100%; }
+    #prologueHint { position:absolute; left:0; right:0; bottom:28px; z-index:210; text-align:center;
+      color:#fff; font-size:15px; text-shadow:0 2px 7px #000; pointer-events:none; }
+    #skipPrologue { position:absolute; bottom:26px; right:20px; z-index:210; padding:9px 18px; font-size:14px;
+      font-weight:600; border:none; border-radius:20px; background:rgba(0,0,0,.5); color:#fff; }
+    /* Menu */
+    #menu { display:none; min-height:100vh; padding:26px 18px 40px; }
+    .head { text-align:center; margin-bottom:6px; }
+    .head .kicker { letter-spacing:3px; font-size:12px; opacity:.75; }
+    .head h2 { font-size:24px; margin:6px 0 2px; }
+    .progress { text-align:center; color:#ffcf6b; font-size:13px; letter-spacing:1px; margin-bottom:18px; }
+    .card { display:flex; align-items:center; gap:14px; width:100%; max-width:460px; margin:0 auto 12px;
+      background:#241d18; border:1px solid #3a2f27; border-radius:16px; padding:12px; text-align:left;
+      color:#ece7e1; cursor:pointer; }
+    .card:active { transform:scale(.99); }
+    .card img { width:78px; height:78px; border-radius:12px; object-fit:cover; flex:0 0 auto; }
+    .card .txt { flex:1 1 auto; min-width:0; }
+    .card .name { font-size:17px; font-weight:700; }
+    .card .title { font-size:13px; color:#ffcf6b; margin:1px 0 3px; }
+    .card .desc { font-size:12.5px; color:#b6a998; line-height:1.35; }
+    .card .lamp { flex:0 0 auto; font-size:22px; width:26px; text-align:center; opacity:.3; }
+    .card.done { border-color:#7a5; }
+    .card.done .lamp { opacity:1; }
+    #resetProgressBtn { display:block; margin:22px auto 0; padding:9px 16px; border:1px solid #51443a;
+      border-radius:20px; background:transparent; color:#a99d90; font-size:13px; }
+    /* Done overlay */
+    #done { display:none; position:fixed; inset:0; z-index:300; background:rgba(20,17,14,.96); flex-direction:column;
+      align-items:center; justify-content:center; text-align:center; padding:30px; }
+    #done h2 { font-size:28px; margin:6px 0; }
+    #done p { max-width:320px; opacity:.9; line-height:1.5; }
+    #done button { margin-top:12px; padding:14px 30px; font-size:16px; font-weight:700; border:none;
+      border-radius:14px; background:#d64b3a; color:#fff; }
+    #done #againBtn { background:transparent; border:1px solid #6a5f52; color:#ece7e1; }
+  </style>
+</head>
+<body>
+  <div id="start">
+    <div class="kicker">LANTERNLIGHT</div>
+    <h1>Lanternlight</h1>
+    <p>Point your camera at your Sparkstone card, then tap to begin. Sound on 🔊</p>
+    <button id="startBtn">Tap to begin</button>
+  </div>
+
+  <div id="prologue">
+    <a-scene id="prologueScene"
+      mindar-image="imageTargetSrc: ep/01/targets.mind?v=3; autoStart: false; filterMinCF: 0.00005; filterBeta: 5; missTolerance: 5; warmupTolerance: 5;"
+      color-space="sRGB" renderer="colorManagement: true"
+      vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false"
+      embedded>
+      <a-assets>
+        <video id="prologueVid" src="ep/01/prologue.mp4" playsinline webkit-playsinline preload="auto"
+          muted crossorigin="anonymous"></video>
+      </a-assets>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-entity id="prologueTarget" mindar-image-target="targetIndex: 0">
+        <a-video id="prologuePlane" src="#prologueVid" width="1" height="1.583"
+          position="0 0 0.01" rotation="0 0 0"></a-video>
+
+        <!-- Card-anchored title: it moves and tilts with the printed card. -->
+        <a-plane width="0.92" height="0.27" position="0 0.61 0.025"
+          color="#17120f" opacity="0.82" material="shader: flat; transparent: true"></a-plane>
+        <a-text value="L A N T E R N L I G H T" align="center" anchor="center"
+          color="#ffcf6b" width="1.25" position="0 0.67 0.035"></a-text>
+        <a-text value="THE TWO WORLDS" align="center" anchor="center"
+          color="#ffffff" width="1.45" position="0 0.565 0.035"></a-text>
+      </a-entity>
+    </a-scene>
+    <div id="prologueHint">Aim at your Sparkstone card ✨</div>
+    <button id="skipPrologue">Skip ›</button>
+  </div>
+
+  <div id="menu">
+    <div class="head">
+      <div class="kicker">LANTERNLIGHT</div>
+      <h2>Choose your friend</h2>
+    </div>
+    <div class="progress" id="progress">0 of 5 lanterns relit</div>
+    <div id="cards"></div>
+    <button id="resetProgressBtn">Reset progress</button>
+  </div>
+
+  <div id="done">
+    <div class="kicker" style="letter-spacing:3px; font-size:12px; opacity:.75;">LANTERNLIGHT</div>
+    <h2>You relit them all! ✨</h2>
+    <p>Every friend of the Underglow is awake, and the colour has come back. Card 2 continues the journey to the Bridge of Lanterns — coming soon.</p>
+    <button id="chooseBtn">Choose a character</button>
+    <button id="againBtn">Reset progress</button>
+  </div>
+
+  <script>
+    const CHARS = [
+      { ep:'01', img:'menu/fenn.png',   name:'Fenn the Foxlight', title:'The Light in Your Pocket',        desc:'His lantern went out. Light it again.' },
+      { ep:'02', img:'menu/momo.png',   name:'Momo',              title:'The Bear Who Ate Worries',        desc:"He carries everyone's worries. Help him breathe." },
+      { ep:'03', img:'menu/otters.png', name:'Tuck & Tally',      title:'Mapmakers of the Ink River',      desc:'Their map is torn in two. Put it together.' },
+      { ep:'04', img:'menu/silva.png',  name:'Silva',             title:'The Almanac of Forgotten Things', desc:'Her book is going blank. Help her remember.' },
+      { ep:'05', img:'menu/bram.png',   name:'Bram',              title:'The Firefly Forge',               desc:'His forge is down to one ember. Spark it.' }
+    ];
+    const doneKey = ep => 'll_done_' + ep;
+    const isDone = ep => { try { return localStorage.getItem(doneKey(ep)) === '1'; } catch(e){ return false; } };
+    const countDone = () => CHARS.filter(c => isDone(c.ep)).length;
+
+    function renderMenu(){
+      const wrap = document.getElementById('cards'); wrap.innerHTML = '';
+      CHARS.forEach(c => {
+        const done = isDone(c.ep);
+        const el = document.createElement('button');
+        el.className = 'card' + (done ? ' done' : '');
+        el.innerHTML =
+          '<img src="' + c.img + '" alt="">' +
+          '<div class="txt"><div class="name">' + c.name + '</div>' +
+          '<div class="title">' + c.title + '</div>' +
+          '<div class="desc">' + c.desc + '</div></div>' +
+          '<div class="lamp">' + (done ? '🏮' : '🕯️') + '</div>';
+        el.addEventListener('click', () => { location.href = 'ep/' + c.ep + '/'; });
+        wrap.appendChild(el);
+      });
+      const n = countDone();
+      document.getElementById('progress').textContent = n + ' of 5 lanterns relit';
+    }
+
+    function showMenu(){
+      renderMenu();
+      document.getElementById('menu').style.display = 'block';
+      if (countDone() >= 5) document.getElementById('done').style.display = 'flex';
+    }
+
+    function playPrologue(){
+      return new Promise((resolve) => {
+        const ov = document.getElementById('prologue');
+        const v = document.getElementById('prologueVid');
+        const scene = document.getElementById('prologueScene');
+        const target = document.getElementById('prologueTarget');
+        const hint = document.getElementById('prologueHint');
+        ov.style.display = 'block';
+        v.currentTime = 0;
+        v.muted = false;
+        let d = false;
+        const finish = async () => {
+          if (d) return;
+          d = true;
+          v.pause();
+          ov.style.display = 'none';
+          try { await scene.systems['mindar-image-system'].stop(); } catch(e){}
+          resolve();
+        };
+        const found = () => {
+          if (d) return;
+          hint.style.display = 'none';
+          v.play().catch(() => {});
+        };
+        const lost = () => {
+          if (d) return;
+          hint.style.display = 'block';
+          v.pause();
+        };
+        target.addEventListener('targetFound', found);
+        target.addEventListener('targetLost', lost);
+        v.addEventListener('ended', finish, { once:true });
+        document.getElementById('skipPrologue').addEventListener('click', finish, { once:true });
+        const startTracking = () => scene.systems['mindar-image-system'].start().catch(finish);
+        if (scene.hasLoaded) startTracking();
+        else scene.addEventListener('loaded', startTracking, { once:true });
+      });
+    }
+
+    document.getElementById('startBtn').addEventListener('click', async () => {
+      const v = document.getElementById('prologueVid');
+      v.muted = true;
+      try { await v.play(); v.pause(); v.currentTime = 0; } catch(e){}
+      v.muted = false;
+      document.getElementById('start').style.display = 'none';
+      await playPrologue();
+      showMenu();
+    });
+
+    document.getElementById('againBtn').addEventListener('click', () => {
+      CHARS.forEach(c => { try { localStorage.removeItem(doneKey(c.ep)); } catch(e){} });
+      document.getElementById('done').style.display = 'none';
+      renderMenu();
+    });
+    document.getElementById('resetProgressBtn').addEventListener('click', () => {
+      CHARS.forEach(c => { try { localStorage.removeItem(doneKey(c.ep)); } catch(e){} });
+      renderMenu();
+    });
+    document.getElementById('chooseBtn').addEventListener('click', () => {
+      document.getElementById('done').style.display = 'none';
+      renderMenu();
+    });
+
+    // Returning from an episode (?menu=1) skips straight to the menu — prologue only on a fresh tap.
+    if (new URLSearchParams(location.search).has('menu')) {
+      document.getElementById('start').style.display = 'none';
+      showMenu();
+    }
+  </script>
+</body>
+</html>

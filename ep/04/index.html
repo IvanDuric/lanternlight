@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Lanternlight — Episode 04</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script>
+    /* ------------------------------------------------------------------
+       scene04-director
+
+       scene4_final.glb is the whole diorama: room, desk, shelves, globe,
+       Silva (Sova) and the press (Presa). The old build loaded ep/01's forest
+       plus a separate hero.glb plus presse.glb, which would have put a second
+       Silva in the room.
+
+       Animations are exported in three name groups from animate_scene4_final.py:
+         Scene04_Normal_*        calm loop (press prints one sheet onto the pile)
+         Scene04_Malfunction_*   2s burst: rapid cycling, smoke, six sheets fly out
+         Scene04_BaseHidden_*    per-prop "scale 0" holder for generated props
+
+       The malfunction burst plays ONCE and clamps, so the six sheets stay where
+       they land and can be swept up. Once a sheet is on the floor this component
+       hands ownership of it to the sweep game, which drives it by hand.
+    ------------------------------------------------------------------ */
+    AFRAME.registerComponent('scene04-director', {
+      init: function () {
+        this.mixer = null;
+        this.model = null;
+        this.clips = { normal: [], malfunction: [], hidden: {} };
+        this.state = null;
+        this.bulbs = [];
+        this.papers = [];
+        this.smokes = [];
+        this.owned = new Set();      // objects the sweep game drives, not the mixer
+        this.onFinished = null;
+        this.flicker = 0;
+
+        this.el.addEventListener('model-loaded', (event) => {
+          const model = event.detail.model;
+          this.model = model;
+          this.mixer = new THREE.AnimationMixer(model);
+
+          // Blender exports its point lights in watt-derived candela — the room
+          // light lands at ~54000, which detonates the diorama under
+          // physicallyCorrectLights. Lighting is done in A-Frame instead.
+          const strays = [];
+          model.traverse((node) => { if (node.isLight) strays.push(node); });
+          strays.forEach((light) => light.parent && light.parent.remove(light));
+
+          model.animations.forEach((clip) => {
+            if (clip.name.startsWith('Scene04_Normal_')) this.clips.normal.push(clip);
+            else if (clip.name.startsWith('Scene04_Malfunction_')) this.clips.malfunction.push(clip);
+            else if (clip.name.startsWith('Scene04_BaseHidden_')) {
+              // One holder clip per prop; key it by the node it targets so the
+              // numbering in the Blender script never has to be mirrored here.
+              clip.tracks.forEach((track) => {
+                this.clips.hidden[track.name.split('.')[0]] = clip;
+              });
+            }
+          });
+
+          for (let i = 1; i <= 6; i++) {
+            const paper = model.getObjectByName('Scene04_PaperScatter_' + String(i).padStart(2, '0'));
+            if (paper) this.papers.push(paper);
+            const smoke = model.getObjectByName('Scene04_Smoke_' + String(i).padStart(2, '0'));
+            if (smoke) this.smokes.push(smoke);
+          }
+          // The three bulbs. Blender's Emission Color / Emission Strength did not
+          // survive the glTF export — every bulb material comes across with no
+          // emissiveFactor at all, so its emissive is black and nothing lights up.
+          // The warm glow is therefore set here, and paired with a real point
+          // light so each bulb also throws light onto the room.
+          const GLOW = new THREE.Color('#ffb066');
+          ['lampa', 'sijalica2', 'sijalica3'].forEach((name, index) => {
+            const bulb = model.getObjectByName(name);
+            if (!bulb || !bulb.material) return;
+            const material = Array.isArray(bulb.material) ? bulb.material[0] : bulb.material;
+            material.emissive = GLOW.clone();
+            material.emissiveIntensity = 1;
+            material.needsUpdate = true;
+            const lampEl = document.getElementById('bulbLight' + (index + 1));
+            this.bulbs.push({
+              material: material,
+              lamp: lampEl && lampEl.components.light ? lampEl.components.light.light : null,
+              lampBase: index === 0 ? 0.55 : 0.4
+            });
+          });
+
+          this.mixer.addEventListener('finished', () => {
+            if (this.state === 'malfunction' && this.onFinished) this.onFinished();
+          });
+
+          this.setState('normal');
+          this.el.emit('scene04-ready', { model: model, papers: this.papers });
+        });
+      },
+
+      // Give one object back to / take it from the animation mixer.
+      own: function (object) { this.owned.add(object); },
+      release: function (object) { this.owned.delete(object); },
+
+      setState: function (state) {
+        if (!this.mixer) return;
+        this.mixer.stopAllAction();
+        this.owned.clear();
+
+        const once = state === 'malfunction';
+        const active = once ? this.clips.malfunction : this.clips.normal;
+        active.forEach((clip) => {
+          const action = this.mixer.clipAction(clip);
+          action.reset();
+          if (once) { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
+          else { action.setLoop(THREE.LoopRepeat, Infinity); action.clampWhenFinished = false; }
+          action.play();
+        });
+
+        // Props that must stay invisible in this state get their holder clip.
+        const hide = once
+          ? ['Scene04_Paper_Normal_Output']
+          : this.papers.concat(this.smokes).map((object) => object.name);
+        hide.forEach((name) => {
+          const clip = this.clips.hidden[name];
+          if (!clip) return;
+          const action = this.mixer.clipAction(clip);
+          action.reset();
+          action.setLoop(THREE.LoopRepeat, Infinity);
+          action.play();
+        });
+
+        this.state = state;
+      },
+
+      tick: function (time, delta) {
+        if (!this.mixer) return;
+        const dt = delta / 1000;
+
+        // Snapshot anything the sweep game owns, let the mixer run, then put the
+        // owned transforms back. That keeps a still-running clamped clip from
+        // fighting a sheet that is already flying to the pile.
+        let saved = null;
+        if (this.owned.size) {
+          saved = [];
+          this.owned.forEach((object) => {
+            saved.push([object, object.position.clone(), object.quaternion.clone(), object.scale.clone()]);
+          });
+        }
+
+        this.mixer.update(dt);
+
+        if (saved) {
+          saved.forEach(([object, position, quaternion, scale]) => {
+            object.position.copy(position);
+            object.quaternion.copy(quaternion);
+            object.scale.copy(scale);
+          });
+        }
+
+        // Bulbs burn steadily and blink hard during the malfunction. Blender kept
+        // this on light + material datablocks, which glTF cannot carry, so the
+        // whole effect is driven here. Applied every frame so the lamps are lit
+        // from the moment the room appears, not only once the press misbehaves.
+        if (this.bulbs.length) {
+          this.flicker += dt;
+          const level = this.state === 'malfunction'
+            ? (Math.sin(this.flicker * 34) > -0.25 ? 1.8 : 0.06)
+            : 1;
+          this.bulbs.forEach((bulb) => {
+            bulb.material.emissiveIntensity = level;
+            if (bulb.lamp) bulb.lamp.intensity = bulb.lampBase * level;
+          });
+        }
+      }
+    });
+  </script>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background:#000; }
+    #start { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; background: #1a1512; color: #ece7e1; text-align: center; padding: 24px; }
+    #start .kicker { letter-spacing: 3px; font-size: 13px; opacity:.8; }
+    #start h1 { font-size: 24px; letter-spacing: 1px; margin: 6px 0 10px; }
+    #start p  { max-width: 300px; opacity: .85; line-height: 1.5; margin: 0; }
+    #start button { margin-top: 22px; padding: 14px 30px; font-size: 18px; font-weight: 700;
+      border: none; border-radius: 12px; background: #d64b3a; color: white; }
+    #hint { position: fixed; bottom: 22px; left: 0; right: 0; z-index: 50; text-align: center;
+      color: #fff; text-shadow: 0 1px 4px #000; font-size: 15px; pointer-events: none; }
+    #caption { position: fixed; bottom: 8%; left: 0; right: 0; z-index: 60; text-align: center;
+      padding: 0 24px; pointer-events: none; color: #fff; font-size: 19px; line-height: 1.4; font-weight: 500;
+      text-shadow: 0 2px 8px #000, 0 0 2px #000; opacity: 0; transition: opacity .4s; white-space: pre-line; }
+    #chapter { position: fixed; top: 14px; left: 16px; z-index: 60; pointer-events:none;
+      color:#fff; font-size:13px; letter-spacing:2px; text-shadow:0 1px 4px #000; }
+    #chapter b { color:#d64b3a; }
+    /* Sweep trail: a soft dot follows the finger so the gesture reads as sweeping. */
+    #sweep { position: fixed; z-index: 55; width: 96px; height: 96px; margin: -48px 0 0 -48px;
+      border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .18s;
+      background: radial-gradient(circle, rgba(255,232,176,.45) 0%, rgba(255,232,176,.14) 45%, rgba(255,232,176,0) 70%); }
+  </style>
+</head>
+<body>
+  <div id="start">
+    <div class="kicker">LANTERNLIGHT · 04 / 10</div>
+    <h1>The Almanac of Forgotten Things</h1>
+    <p>Point your camera at your Sparkstone card, then tap Silva to open the Almanac. Sound on 🔊</p>
+    <button id="startBtn">Tap to begin</button>
+    <p id="err" style="color:#ffb4a8; font-size:13px; margin-top:14px; max-width:300px;"></p>
+  </div>
+
+  <div id="chapter" style="display:none;">LANTERNLIGHT · <b>04</b> / 10</div>
+  <div id="hint" style="display:none;">Aim at your card ✨</div>
+  <div id="caption"></div>
+  <div id="sweep"></div>
+  <div id="goal" style="display:none; position:fixed; top:64px; left:0; right:0; z-index:60; text-align:center;
+       color:#ffe8b0; font-size:16px; font-weight:500; text-shadow:0 2px 6px #000; pointer-events:none;">Tap Silva 📖</div>
+  <div id="counter" style="display:none; position:fixed; top:96px; left:0; right:0; z-index:60; color:#eaff9a;
+       font-size:15px; font-weight:500; text-align:center; text-shadow:0 2px 6px #000; pointer-events:none;">0 / 6 pages gathered</div>
+  <div id="banner" style="display:none; opacity:0; position:fixed; top:34%; left:0; right:0; z-index:65; text-align:center;
+       padding:0 24px; color:#fff; font-size:23px; font-weight:700; line-height:1.35; text-shadow:0 3px 10px #000;
+       pointer-events:none; transition:opacity .5s; white-space:pre-line;"></div>
+  <div id="blackout" style="position:fixed; inset:0; z-index:70; background:#000; opacity:0; pointer-events:none; transition:opacity .9s;"></div>
+
+  <!-- Completion screen -->
+  <div id="endcard" style="display:none; position:fixed; inset:0; z-index:9000; background:rgba(20,17,14,0.94);
+       color:#ece7e1; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:28px;">
+    <div style="letter-spacing:3px; font-size:13px; opacity:.8;">LANTERNLIGHT · EPISODE 04</div>
+    <div style="font-size:26px; font-weight:700; margin:8px 0 4px;">Episode complete ✨</div>
+    <p style="max-width:320px; opacity:.9; line-height:1.5; margin:0 0 18px;">You gathered every runaway page and helped Silva finish the Almanac.</p>
+    <div id="meter" style="display:flex; gap:7px; margin-bottom:8px;"></div>
+    <div id="meterText" style="font-size:14px; opacity:.85; margin-bottom:22px;">4 of 5 lanterns relit</div>
+    <p style="max-width:300px; font-size:15px; opacity:.9; margin:0 0 22px;">Choose any friend to continue exploring the Underglow.</p>
+    <button id="continueBtn" style="padding:13px 28px; font-size:16px; font-weight:700; border:none; border-radius:12px; background:#d64b3a; color:#fff; margin-bottom:12px;">Choose a character →</button>
+    <button id="playAgain" style="padding:11px 24px; font-size:15px; font-weight:500; border:1px solid #6a5f52; border-radius:12px; background:transparent; color:#ece7e1;">Play again</button>
+  </div>
+
+  <audio id="music" src="./music.mp3" preload="auto" loop></audio>
+  <audio id="narration" src="./narration.mp3" preload="auto"></audio>
+
+  <a-scene
+    mindar-image="imageTargetSrc: ./targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; filterBeta: 5; missTolerance: 5; warmupTolerance: 5;"
+    gltf-model="dracoDecoderPath: https://www.gstatic.com/draco/v1/decoders/"
+    color-space="sRGB" renderer="colorManagement: true, physicallyCorrectLights: true, exposure: 1.1"
+    vr-mode-ui="enabled: false" device-orientation-permission-ui="enabled: false">
+
+    <a-assets>
+      <a-asset-item id="sceneModel" src="./scene4_final.glb?v=scene04-2"></a-asset-item>
+      <video id="introVid" src="./intro.mp4" preload="auto" playsinline webkit-playsinline muted crossorigin="anonymous"></video>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-entity id="ambient" light="type: ambient; intensity: 0.55; color: #ffeacb"></a-entity>
+    <a-entity id="sun"     light="type: directional; intensity: 0.7; color: #fff4e2" position="1 2 1"></a-entity>
+
+    <a-entity mindar-image-target="targetIndex: 0">
+
+      <!-- PHASE 1: optional intro video over the card (falls back to 3D if no intro.mp4). -->
+      <a-video id="introPlane" src="#introVid" width="1" height="1.583" position="0 0 0.01" rotation="0 0 0" visible="false"></a-video>
+
+      <a-entity id="rig" rotation="90 0 0" visible="false" scale="0.05 0.05 0.05"
+                animation__grow="property: scale; from: 0.05 0.05 0.05; to: 4 4 4; dur: 1400; easing: easeOutBack; startEvents: reveal">
+
+        <!--
+          scene4_final.glb is 3.18 x 2.71 units across; ep/01's forest is 1.3 x 1.48
+          at scale 0.7, so 0.30 gives this room the same presence on the card.
+          The offset re-centres the *action* (press, Silva, paper pile) over the
+          marker, since the authored layout puts all three on the +X / +Z side.
+          If the diorama faces away from you, set rotation="0 180 0".
+        -->
+        <a-gltf-model id="diorama" src="#sceneModel"
+                      position="-0.17 0 -0.19" rotation="0 0 0" scale="0.30 0.30 0.30"
+                      scene04-director></a-gltf-model>
+
+        <!-- No ground disc here. Episode 1 needed one because its forest had no
+             floor; this room brings its own slab (pod), which spans rig y 0..0.0286
+             and is 0.477 wide — a 0.5 disc at y 0.01 sits inside it and z-fights. -->
+
+        <!-- Warm glow at Silva's chest: OFF until she is tapped. Rig position is
+             diorama offset + 0.30 * her model position (0.985, 0.62, 0). -->
+        <a-light id="lanternGlow" type="point" color="#ffd9a0" intensity="0" distance="1.4" position="0.126 0.186 -0.19"></a-light>
+        <a-sphere id="lanternCore" radius="0.02" color="#fff0d2" visible="false" position="0.126 0.186 -0.19"
+                  material="shader: flat; emissive: #ffd9a0"></a-sphere>
+
+        <!-- Pulsing hint on Silva before the first tap. -->
+        <a-light id="emberLight" type="point" color="#ffc98f" intensity="0.12" distance="0.8" position="0.126 0.186 -0.19"
+                 animation="property: light.intensity; dir: alternate; loop: true; from: 0.06; to: 0.28; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-light>
+        <a-sphere id="lanternEmber" radius="0.015" color="#ffc98f" position="0.126 0.186 -0.19"
+                  material="shader: flat; transparent: true; opacity: 0.4"
+                  animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.2; to: 0.65; dur: 1100; easing: easeInOutSine; startEvents: reveal"
+                  animation__s="property: scale; dir: alternate; loop: true; from: 0.8 0.8 0.8; to: 1.35 1.35 1.35; dur: 1100; easing: easeInOutSine; startEvents: reveal"></a-sphere>
+
+        <!-- Beat 2 hint: a ring around the press lever. Model (0.36, 0.56, 0.58). -->
+        <a-torus id="pressHint" visible="false" radius="0.09" radius-tubular="0.006"
+                 position="-0.062 0.168 -0.016" rotation="-90 0 0" color="#ffd27a"
+                 material="shader: flat; transparent: true; opacity: 0.85"
+                 animation__p="property: scale; dir: alternate; loop: true; from: 0.75 0.75 0.75; to: 1.25 1.25 1.25; dur: 900; easing: easeInOutSine"
+                 animation__o="property: material.opacity; dir: alternate; loop: true; from: 0.35; to: 0.9; dur: 900; easing: easeInOutSine"></a-torus>
+
+        <!-- Warm light over the press; flares while the machine runs wild. -->
+        <a-light id="pressFlash" type="point" color="#ffb066" intensity="0" distance="1.6" position="-0.17 0.3 0.047"></a-light>
+
+        <!-- One point light per bulb, at diorama offset + 0.30 * the bulb's model
+             position. The director drives their intensity together with the bulb
+             emissive, so they glow from the start and blink during the malfunction.
+               lampa      (-0.494, 0.731, -0.150)
+               sijalica2  ( 0.923, 1.477, -0.779)
+               sijalica3  (-0.463, 0.937, -0.808)  -->
+        <a-light id="bulbLight1" type="point" color="#ffb066" intensity="0.55" distance="1.5" position="-0.318 0.219 -0.235"></a-light>
+        <a-light id="bulbLight2" type="point" color="#ffb066" intensity="0.4"  distance="1.3" position="0.107 0.443 -0.424"></a-light>
+        <a-light id="bulbLight3" type="point" color="#ffb066" intensity="0.4"  distance="1.3" position="-0.309 0.281 -0.432"></a-light>
+      </a-entity>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    const sceneEl = document.querySelector('a-scene');
+    const startEl = document.getElementById('start');
+    const startBtn = document.getElementById('startBtn');
+    const hintEl = document.getElementById('hint');
+    const chapterEl = document.getElementById('chapter');
+    const capEl = document.getElementById('caption');
+    const music = document.getElementById('music');
+    const narration = document.getElementById('narration');
+    const targetEl = document.querySelector('[mindar-image-target]');
+    const dioramaEl = document.getElementById('diorama');
+    const introVid = document.getElementById('introVid');
+    const introPlane = document.getElementById('introPlane');
+    const blackout = document.getElementById('blackout');
+    const goalEl = document.getElementById('goal');
+    const counterEl = document.getElementById('counter');
+    const bannerEl = document.getElementById('banner');
+    const sweepEl = document.getElementById('sweep');
+    const pressHint = document.getElementById('pressHint');
+    const pressFlash = document.getElementById('pressFlash');
+
+    // --- Tuning -----------------------------------------------------------
+    const WAVES = 2;              // press bursts; 6 pages each. Set to 1 for a shorter episode.
+    const PAGES_PER_WAVE = 6;
+    const TOTAL_PAGES = WAVES * PAGES_PER_WAVE;
+    const FLIGHT_TIME = 0.55;     // seconds for a swept page to reach the pile
+    const PILE_AT = { x: 0.76, y: 0.118, z: 1.08 };   // model space, on top of the printed pile
+    // ----------------------------------------------------------------------
+
+    // Captions stay matched to the existing narration.mp3. The press beat is
+    // added AFTER the narration, so the audio never has to be re-recorded.
+    const CAPTIONS = [
+      { t: 0.0, text: "This is Silva," },
+      { t: 2.1, text: "keeper of the Almanac —" },
+      { t: 5.1, text: "the book of everything\nwe're trying not to forget." },
+      { t: 10.1, text: "But its pages are going blank." },
+      { t: 13.1, text: "The Hush doesn't roar…\nit erases. Quietly." },
+      { t: 18.1, text: "Tap Silva…" },
+      { t: 20.1, text: "and help her remember." }
+    ];
+    let playedOnce = false, ignited = false, introPlayed = false, introBroken = false;
+
+    function showCaption(t){ capEl.textContent = t; capEl.style.opacity = t ? 1 : 0; }
+    function captionAt(time){ let cur = ""; for (const c of CAPTIONS){ if (time >= c.t) cur = c.text; else break; } return cur; }
+    narration.addEventListener('timeupdate', () => { if (playedOnce) showCaption(captionAt(narration.currentTime)); });
+    let bannerTimer = null;
+    function showBanner(text, ms){
+      bannerEl.textContent = text; bannerEl.style.display = 'block';
+      requestAnimationFrame(() => { bannerEl.style.opacity = 1; });
+      clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => { bannerEl.style.opacity = 0; setTimeout(() => { bannerEl.style.display = 'none'; }, 500); }, ms);
+    }
+
+    /* ---------------------------------------------------------------
+       Sound. Synthesised rather than shipped as files: a paper rustle is
+       a noise burst, and this keeps the episode's payload where it is.
+    --------------------------------------------------------------- */
+    let audioCtx = null;
+    function ac(){
+      if (!audioCtx) { const C = window.AudioContext || window.webkitAudioContext; if (C) audioCtx = new C(); }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      return audioCtx;
+    }
+    function rustle(){
+      const ctx = ac(); if (!ctx) return;
+      const len = Math.floor(ctx.sampleRate * 0.22);
+      const buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.4);
+      const src = ctx.createBufferSource(); src.buffer = buffer;
+      const band = ctx.createBiquadFilter(); band.type = 'bandpass';
+      band.frequency.value = 1900 + Math.random() * 900; band.Q.value = 0.8;
+      const gain = ctx.createGain(); gain.gain.value = 0.22;
+      src.connect(band).connect(gain).connect(ctx.destination); src.start();
+    }
+    function clatter(){
+      const ctx = ac(); if (!ctx) return;
+      for (let i = 0; i < 7; i++){
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = 'square'; osc.frequency.value = 90 + Math.random() * 130;
+        const at = ctx.currentTime + i * 0.16;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.14, at + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.13);
+        osc.connect(gain).connect(ctx.destination); osc.start(at); osc.stop(at + 0.15);
+      }
+    }
+    /* The runaway-press cue (chaos.mp3, generated by make_chaos_music.py: E minor
+       to match the calm bed, 150 BPM, clockwork and clanks). It runs from the
+       moment the press is tapped until the last page is gathered.
+
+       Played through WebAudio rather than an <audio loop> because MP3 encoder
+       padding puts an audible gap at the loop seam. The calm bed ducks under it
+       and comes back when the room settles. */
+    const CHAOS_GAIN = 0.16;      // raise for more drama; the cue is ~2.5x hotter than music.mp3
+    let chaosBuffer = null, chaosSource = null, chaosGain = null;
+
+    async function loadChaos(){
+      const ctx = ac(); if (!ctx || chaosBuffer) return;
+      try {
+        const response = await fetch('./chaos.mp3');
+        chaosBuffer = await ctx.decodeAudioData(await response.arrayBuffer());
+      } catch (e) { chaosBuffer = null; }   // episode still plays, just without the cue
+    }
+    function fadeElement(el, to, ms){
+      const from = el.volume, t0 = performance.now();
+      (function step(){
+        const k = Math.min(1, (performance.now() - t0) / ms);
+        el.volume = Math.max(0, Math.min(1, from + (to - from) * k));
+        if (k < 1) requestAnimationFrame(step);
+      })();
+    }
+    function startChaos(){
+      const ctx = ac();
+      fadeElement(music, 0.05, 700);        // duck the calm bed either way
+      if (!ctx || !chaosBuffer || chaosSource) return;
+      chaosGain = ctx.createGain();
+      chaosGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      chaosGain.gain.exponentialRampToValueAtTime(CHAOS_GAIN, ctx.currentTime + 0.7);
+      chaosSource = ctx.createBufferSource();
+      chaosSource.buffer = chaosBuffer;
+      chaosSource.loop = true;
+      chaosSource.connect(chaosGain).connect(ctx.destination);
+      chaosSource.start();
+    }
+    function stopChaos(){
+      const ctx = ac();
+      if (ctx && chaosSource && chaosGain){
+        const now = ctx.currentTime;
+        chaosGain.gain.cancelScheduledValues(now);
+        chaosGain.gain.setValueAtTime(Math.max(0.0001, chaosGain.gain.value), now);
+        chaosGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+        const dying = chaosSource;
+        setTimeout(() => { try { dying.stop(); } catch(e){} }, 1400);
+        chaosSource = null; chaosGain = null;
+      }
+      fadeElement(music, 0.32, 1400);
+    }
+
+    function chime(){
+      const ctx = ac(); if (!ctx) return;
+      [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = 'sine'; osc.frequency.value = freq;
+        const at = ctx.currentTime + i * 0.1;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.16, at + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.85);
+        osc.connect(gain).connect(ctx.destination); osc.start(at); osc.stop(at + 0.9);
+      });
+    }
+
+    /* ---------------------------------------------------------------
+       The press game.
+    --------------------------------------------------------------- */
+    let director = null, sceneModel = null;
+    let phase = 'idle';           // idle -> press -> printing -> sweep -> done
+    let wave = 0, collected = 0;
+    let sheets = [];              // { object, home, collected, t, from, spin, slot }
+    let pileSlot = 0;
+
+    dioramaEl.addEventListener('scene04-ready', (event) => {
+      director = dioramaEl.components['scene04-director'];
+      sceneModel = event.detail.model;
+      sheets = event.detail.papers.map((object) => ({
+        object: object, collected: false, t: 0, from: null, spin: 0, slot: 0
+      }));
+    });
+
+    function igniteWorld(){
+      if (ignited) return; ignited = true;
+      ['lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.setAttribute('visible', false); });
+      document.getElementById('ambient').setAttribute('animation__i', 'property: light.intensity; to: 0.85; dur: 1200; easing: easeOutCubic');
+      document.getElementById('sun').setAttribute('animation__i', 'property: light.intensity; to: 0.95; dur: 1200; easing: easeOutCubic');
+      document.getElementById('lanternGlow').setAttribute('animation__on', 'property: light.intensity; to: 0.9; dur: 900; easing: easeOutBack');
+      const core = document.getElementById('lanternCore');
+      core.setAttribute('visible', true);
+      core.setAttribute('animation__p', 'property: scale; dir: alternate; loop: true; from: 1 1 1; to: 1.4 1.4 1.4; dur: 1400; easing: easeInOutSine');
+      pressFlash.setAttribute('animation__warm', 'property: light.intensity; to: 0.5; dur: 900; easing: easeOutCubic');
+
+      // Beat 2: hand the child over to the press.
+      phase = 'press';
+      pressHint.setAttribute('visible', true);
+      goalEl.textContent = 'Tap the printing press 🖨️';
+      showBanner('Silva needs a new book.\nTap the press to start it ✨', 3600);
+    }
+
+    function runPress(){
+      if (phase !== 'press' || !director) return;
+      phase = 'printing';
+      wave++;
+      pressHint.setAttribute('visible', false);
+      goalEl.style.display = 'none';
+
+      director.onFinished = onBurstFinished;
+      director.setState('malfunction');
+      clatter();
+      startChaos();
+      pressFlash.removeAttribute('animation__warm');
+      pressFlash.setAttribute('animation__panic',
+        'property: light.intensity; dir: alternate; loop: true; from: 0.2; to: 2.2; dur: 130; easing: linear');
+      showBanner(wave === 1
+        ? 'Oh no — the press has run wild! 📄📄📄'
+        : 'One more burst! 📄📄📄', 2400);
+    }
+
+    function onBurstFinished(){
+      if (phase !== 'printing') return;
+      phase = 'sweep';
+      pressFlash.removeAttribute('animation__panic');
+      pressFlash.setAttribute('animation__calm', 'property: light.intensity; to: 0.5; dur: 700; easing: easeOutCubic');
+
+      // The malfunction clip is clamped on its last frame, so each sheet is
+      // sitting exactly where it landed. Take the sheets off the mixer and
+      // remember that pose as the sweep game's starting point.
+      sheets.forEach((sheet) => {
+        sheet.collected = false; sheet.t = 0; sheet.from = null;
+        sheet.object.updateMatrix();
+        director.own(sheet.object);
+      });
+
+      goalEl.textContent = 'Sweep the pages onto the pile ✋';
+      goalEl.style.display = 'block';
+      counterEl.style.display = 'block';
+      counterEl.textContent = collected + ' / ' + TOTAL_PAGES + ' pages gathered';
+      showBanner('Brush your finger over the pages\nto sweep them into a pile ✋', 3600);
+    }
+
+    function pileTarget(slot){
+      return {
+        x: PILE_AT.x + (slot % 3 - 1) * 0.02,
+        y: PILE_AT.y + slot * 0.008,
+        z: PILE_AT.z + (Math.floor(slot / 3) % 3 - 1) * 0.02
+      };
+    }
+
+    function collectSheet(sheet){
+      if (sheet.collected) return;
+      sheet.collected = true;
+      sheet.t = 0;
+      sheet.from = {
+        position: sheet.object.position.clone(),
+        quaternion: sheet.object.quaternion.clone()
+      };
+      // Each gathered page stacks a little higher, so the pile visibly grows.
+      sheet.slot = pileSlot++;
+      sheet.spin = (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 1.4);
+      rustle();
+
+      collected++;
+      counterEl.textContent = collected + ' / ' + TOTAL_PAGES + ' pages gathered';
+
+      if (sheets.every((s) => s.collected)) {
+        if (wave < WAVES) {
+          setTimeout(nextWave, 1100);
+        } else {
+          setTimeout(finale, 1000);
+        }
+      }
+    }
+
+    /* Freeze the gathered pages into the pile as plain, un-animated twins.
+
+       The six PaperScatter nodes are reused by the next burst, and returning to
+       the calm state re-applies their "scale 0" holder clip — so without this the
+       pile the child just built would empty itself out again. The twin shares the
+       original geometry and material, so this costs nothing. */
+    const pileBakes = [];
+    function bakeWave(){
+      sheets.forEach((sheet) => {
+        if (!sheet.collected) return;
+        if (sheet.t < 1 && sheet.from) {      // snap any page still in flight
+          const target = pileTarget(sheet.slot);
+          sheet.object.position.set(target.x, target.y, target.z);
+          sheet.object.quaternion.setFromEuler(
+            new THREE.Euler(0, (sheet.slot * 0.35) % (Math.PI * 2), 0));
+          sheet.t = 1;
+        }
+        const twin = sheet.object.clone();
+        twin.name = sheet.object.name + '_settled';
+        if (sheet.object.parent) sheet.object.parent.add(twin);
+        pileBakes.push(twin);
+        director.release(sheet.object);
+      });
+    }
+
+    function nextWave(){
+      bakeWave();
+      phase = 'press';
+      goalEl.textContent = 'Tap the press again 🖨️';
+      goalEl.style.display = 'block';
+      pressHint.setAttribute('visible', true);
+      showBanner('The press is still rattling…\nTap it again 🖨️', 2800);
+    }
+
+    function finale(){
+      bakeWave();
+      phase = 'done';
+      goalEl.style.display = 'none';
+      counterEl.textContent = 'Every page gathered ✨';
+      // Beat 3: the press settles back into its calm printing loop.
+      director.onFinished = null;
+      director.setState('normal');
+      stopChaos();
+      chime();
+      document.getElementById('lanternGlow').setAttribute('animation__bloom', 'property: light.intensity; to: 1.8; dur: 1000; easing: easeOutCubic');
+      document.getElementById('ambient').setAttribute('animation__bright', 'property: light.intensity; to: 1.05; dur: 1000');
+      showBanner('The press is calm again.\nThe Almanac is whole ✨', 3000);
+      setTimeout(showEndcard, 3600);
+    }
+
+    // Per-frame flight of the swept pages. Runs after the director's tick, so
+    // the transforms written here are the ones that survive.
+    AFRAME.registerComponent('sweep-flight', {
+      tick: function (time, delta) {
+        if (!sheets.length) return;
+        const dt = Math.min(0.05, delta / 1000);
+        for (const sheet of sheets) {
+          if (!sheet.collected || !sheet.from) continue;
+          if (sheet.t >= 1) continue;
+          sheet.t = Math.min(1, sheet.t + dt / FLIGHT_TIME);
+          const k = sheet.t;
+          const ease = 1 - Math.pow(1 - k, 2.2);
+          const target = pileTarget(sheet.slot);
+          sheet.object.position.set(
+            sheet.from.position.x + (target.x - sheet.from.position.x) * ease,
+            sheet.from.position.y + (target.y - sheet.from.position.y) * ease + Math.sin(Math.PI * k) * 0.42,
+            sheet.from.position.z + (target.z - sheet.from.position.z) * ease
+          );
+          // Tumble in flight, then settle flat on the stack.
+          const flat = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(0, (sheet.slot * 0.35) % (Math.PI * 2), 0));
+          const tumble = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(Math.sin(k * 6) * sheet.spin, k * sheet.spin * 3, Math.cos(k * 5) * sheet.spin * 0.6));
+          sheet.object.quaternion.copy(sheet.from.quaternion).slerp(tumble, Math.sin(Math.PI * k));
+          sheet.object.quaternion.slerp(flat, ease * ease);
+        }
+      }
+    });
+    sceneEl.setAttribute('sweep-flight', '');
+
+    /* ---------------------------------------------------------------
+       Sweep input. Hold and brush: any page the finger passes near is
+       swept up. A plain tap on a page works too, so the gesture never
+       has to be explained. Deliberately NOT pick-up-and-carry: one hand
+       is holding the phone and the marker jitters.
+    --------------------------------------------------------------- */
+    function sweepRadius(){
+      const rect = sceneEl.canvas.getBoundingClientRect();
+      return Math.max(54, Math.min(rect.width, rect.height) * 0.17);
+    }
+    const projected = new THREE.Vector3();
+    function screenPoint(worldVec){
+      const camera = sceneEl.camera; if (!camera || !sceneEl.canvas) return null;
+      const rect = sceneEl.canvas.getBoundingClientRect();
+      projected.copy(worldVec).project(camera);
+      return {
+        x: rect.left + (projected.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-projected.y * 0.5 + 0.5) * rect.height
+      };
+    }
+    const worldTmp = new THREE.Vector3();
+    function screenPos(object3D){
+      object3D.getWorldPosition(worldTmp);
+      return screenPoint(worldTmp);
+    }
+
+    /* Hit-testing against a node's ORIGIN is wrong for this diorama: Blender put
+       Presa's origin on the floor, 0.48 model units below the machine you can see,
+       and Sova's 0.45 below her face. Aiming at the origin means the child has to
+       click the bare floor underneath the object. Measure the bounding-box centre
+       once in the node's own local space, then convert to world on every test so
+       it still tracks when the marker moves. */
+    const centreCache = new Map();
+    function nodeCentre(node){
+      let local = centreCache.get(node.uuid);
+      if (!local) {
+        const centre = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
+        local = node.worldToLocal(centre);
+        centreCache.set(node.uuid, local);
+      }
+      return node.localToWorld(local.clone());
+    }
+    function sweepAt(clientX, clientY){
+      if (phase !== 'sweep') return;
+      const radius = sweepRadius();
+      for (const sheet of sheets){
+        if (sheet.collected) continue;
+        const point = screenPos(sheet.object); if (!point) continue;
+        if (Math.hypot(point.x - clientX, point.y - clientY) <= radius) collectSheet(sheet);
+      }
+    }
+
+    let sweeping = false, multiTouch = false;
+    function showSweep(x, y){ sweepEl.style.left = x + 'px'; sweepEl.style.top = y + 'px'; sweepEl.style.opacity = 1; }
+    function hideSweep(){ sweepEl.style.opacity = 0; }
+
+    function pointerDown(x, y){
+      if (!playedOnce || multiTouch) return;
+      sweeping = true;
+      if (phase === 'sweep'){ showSweep(x, y); sweepAt(x, y); }
+    }
+    function pointerMove(x, y){
+      if (!sweeping || multiTouch) return;
+      if (phase === 'sweep'){ showSweep(x, y); sweepAt(x, y); }
+    }
+    function pointerUp(){ sweeping = false; hideSweep(); }
+
+    document.addEventListener('touchstart', (e) => {
+      multiTouch = e.touches.length > 1;
+      if (multiTouch) { pointerUp(); return; }
+      pointerDown(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 1) { multiTouch = true; pointerUp(); return; }
+      pointerMove(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      if (e.touches.length === 0) { multiTouch = false; pointerUp(); }
+    }, { passive: true });
+    document.addEventListener('mousedown', (e) => pointerDown(e.clientX, e.clientY));
+    document.addEventListener('mousemove', (e) => pointerMove(e.clientX, e.clientY));
+    document.addEventListener('mouseup', pointerUp);
+
+    /* --------------------------------------------------------------- */
+
+    function showEndcard(){
+      try { localStorage.setItem('ll_done_04', '1'); } catch(e){}
+      const doneStates = ['01','02','03','04','05'].map(k => { try { return localStorage.getItem('ll_done_'+k)==='1'; } catch(e){ return false; } });
+      const dc = doneStates.filter(Boolean).length;
+      const meter = document.getElementById('meter'); meter.innerHTML = '';
+      for (let i = 0; i < 5; i++){
+        const d = document.createElement('div');
+        d.style.cssText = 'width:18px; height:18px; border-radius:50%;' +
+          (doneStates[i] ? 'background:#ffcf6b; box-shadow:0 0 8px #ffcf6b;' : 'background:#4a4038;');
+        meter.appendChild(d);
+      }
+      const mt = document.getElementById('meterText'); if (mt) mt.textContent = dc + ' of 5 lanterns relit';
+      const ec = document.getElementById('endcard');
+      ec.style.opacity = 0; ec.style.display = 'flex'; ec.style.transition = 'opacity .8s';
+      requestAnimationFrame(() => { ec.style.opacity = 1; });
+    }
+    document.getElementById('playAgain').addEventListener('click', () => location.reload());
+    document.getElementById('continueBtn').addEventListener('click', () => { location.href = '../../?menu=1'; });
+
+    // Wait until the A-Frame scene AND MindAR are actually ready, then start (retrying
+    // past the known 'this.ui.showLoading' race), so a single tap always works.
+    function sceneReady(){
+      return new Promise(res => { sceneEl.hasLoaded ? res() : sceneEl.addEventListener('loaded', () => res(), { once: true }); });
+    }
+    async function startAR(){
+      await sceneReady();
+      const sys = sceneEl.systems['mindar-image-system'];
+      if (!sys) throw new Error('MindAR not ready — reload the page.');
+      let lastErr;
+      for (let i = 0; i < 30; i++){
+        try { await sys.start(); return; }
+        catch (e){
+          lastErr = e;
+          if (/showLoading|ui|undefined/i.test(String(e && e.message || e))) { await new Promise(r => setTimeout(r, 200)); continue; }
+          throw e;
+        }
+      }
+      throw lastErr || new Error('MindAR did not become ready');
+    }
+
+    startBtn.addEventListener('click', async () => {
+      startBtn.textContent = 'Starting…';
+      document.getElementById('err').textContent = '';
+      ac();   // unlock WebAudio on the same gesture that unlocks the media elements
+      loadChaos();
+      [music, introVid, narration].forEach(a => { a.muted = true; const p = a.play(); if (p) p.then(()=>{ a.pause(); a.currentTime = 0; a.muted = false; }).catch(()=>{ a.muted = false; }); });
+      try {
+        await startAR();
+        startEl.style.display = 'none';
+        hintEl.style.display = 'block';
+        chapterEl.style.display = 'block';
+      } catch (err) {
+        startBtn.textContent = 'Tap to retry';
+        document.getElementById('err').textContent = 'Could not start: ' + (err.message || err);
+      }
+    });
+
+    const rigEl = document.getElementById('rig');
+    let pinchStart = 0, rigScale = 4;
+    document.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        if (!pinchStart) { pinchStart = d; return; }
+        const s = Math.max(0.5, Math.min(9, rigScale * d / pinchStart));
+        rigEl.object3D.scale.set(s, s, s);
+        rigEl.dataset.scale = s;
+      }
+    }, { passive: false });
+    document.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2 && pinchStart) { rigScale = parseFloat(rigEl.dataset.scale) || rigScale; pinchStart = 0; }
+    });
+
+    // PHASE 2: the room grows out of the card.
+    function revealScene(){
+      if (playedOnce) return; playedOnce = true; introPlayed = true;
+      introVid.pause();
+      introPlane.setAttribute('visible', false);
+      document.getElementById('rig').setAttribute('visible', true);
+      blackout.style.transition = 'none';
+      blackout.style.opacity = 1;
+      requestAnimationFrame(() => {
+        blackout.style.transition = 'opacity 1.1s';
+        blackout.style.opacity = 0;
+        ['rig','lanternEmber','emberLight'].forEach(id => { const e = document.getElementById(id); if (e) e.emit('reveal'); });
+        music.volume = 0.22; if (music.paused) music.play().catch(()=>{});
+        narration.currentTime = 0; narration.play().catch(()=>{});
+        goalEl.style.display = 'block';
+      });
+    }
+    introVid.addEventListener('error', () => { introBroken = true; });
+    introVid.addEventListener('ended', revealScene);
+    narration.addEventListener('ended', () => { showCaption(''); music.volume = 0.32; });
+
+    targetEl.addEventListener('targetFound', () => {
+      hintEl.style.display = 'none';
+      if (!introPlayed) {
+        if (introBroken) { revealScene(); return; }       // no intro.mp4 -> straight to 3D
+        introPlane.setAttribute('visible', true);
+        if (music.paused) { music.volume = 0.35; music.play().catch(()=>{}); }
+        if (introVid.paused) introVid.play().catch(() => revealScene());
+      }
+    });
+
+    targetEl.addEventListener('targetLost', () => {
+      if (!introPlayed) introVid.pause();
+    });
+
+    // Screen-space hit test against a model node, which is far more forgiving on
+    // a jittering marker than a raycast against the mesh itself.
+    function tapIsNear(ev, nodeName, radius){
+      if (!sceneModel || !sceneEl.camera || !sceneEl.canvas) return false;
+      const node = sceneModel.getObjectByName(nodeName); if (!node) return false;
+      const source = ev.detail && ev.detail.mouseEvent ? ev.detail.mouseEvent : ev;
+      if (!Number.isFinite(source.clientX) || !Number.isFinite(source.clientY)) return false;
+      const point = screenPoint(nodeCentre(node)); if (!point) return false;
+      return Math.hypot(point.x - source.clientX, point.y - source.clientY) <= radius;
+    }
+
+    sceneEl.addEventListener('click', (ev) => {
+      if (!playedOnce) return;
+      if (!ignited){
+        if (!tapIsNear(ev, 'Sova', 130)) return;      // Silva
+        igniteWorld();
+        return;
+      }
+      if (phase === 'press' && tapIsNear(ev, 'Presa', 160)) runPress();
+    });
+
+    /* Desktop testing shortcuts. Harmless on a phone, which has no keyboard.
+         space  advance the current beat (wake Silva, then start the press)
+         g      sweep up every remaining page at once
+         n      jump straight to the end card                                  */
+    document.addEventListener('keydown', (ev) => {
+      if (!playedOnce) return;
+      const key = ev.key.toLowerCase();
+      if (key === ' ' || key === 'spacebar') {
+        ev.preventDefault();
+        if (!ignited) igniteWorld();
+        else if (phase === 'press') runPress();
+      } else if (key === 'g' && phase === 'sweep') {
+        sheets.forEach(collectSheet);
+      } else if (key === 'n') {
+        showEndcard();
+      }
+    });
+  </script>
+</body>
+</html>
