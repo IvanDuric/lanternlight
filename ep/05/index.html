@@ -114,13 +114,16 @@
       <video id="introVid" src="./intro.mp4" preload="auto" playsinline webkit-playsinline muted crossorigin="anonymous"></video>
     </a-assets>
 
-    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+    <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
 
     <!-- Bram begins in the light; the tap starts his activity. -->
     <a-entity id="ambient" light="type: ambient; intensity: 0.9; color: #eaf1ff"></a-entity>
     <a-entity id="sun"     light="type: directional; intensity: 1.05; color: #f8fbff" position="1 2 1"></a-entity>
 
-    <a-entity mindar-image-target="targetIndex: 0">
+    <!-- Plain container. mindar-image-target is attached only in AR mode: its
+         init() reaches into the mindar-image system, and it hides its entity
+         until a marker is found — which never happens without a camera. -->
+    <a-entity id="anchor">
 
       <!-- PHASE 1: optional intro video over the card (falls back to 3D if no intro.mp4). -->
       <a-video id="introPlane" src="#introVid" width="1" height="1.583" position="0 0 0.01" rotation="0 0 0" visible="false"></a-video>
@@ -168,7 +171,7 @@
     const capEl = document.getElementById('caption');
     const music = document.getElementById('music');
     const narration = document.getElementById('narration');
-    const targetEl = document.querySelector('[mindar-image-target]');
+    const targetEl = document.getElementById('anchor');
     const heroEl = document.getElementById('hero');
     const introVid = document.getElementById('introVid');
     const introPlane = document.getElementById('introPlane');
@@ -426,11 +429,10 @@
       SCREEN_MODE = true;
       await sceneReady();
 
-      // The target entity does nothing without MindAR, so it simply becomes a
-      // plain holder sitting at the origin. Undo the "lie flat on the card"
+      // The anchor never gets the mindar component, so it stays a plain holder
+      // at the origin and stays visible. Undo the "lie flat on the card"
       // rotation so the forge stands upright in front of the camera.
-      const targetHolder = document.querySelector('[mindar-image-target]');
-      if (targetHolder) targetHolder.removeAttribute('mindar-image-target');
+      targetEl.object3D.visible = true;
       rigEl.setAttribute('rotation', '0 0 0');
 
       const cam = document.querySelector('a-camera');
@@ -453,6 +455,8 @@
         sceneEl.setAttribute('mindar-image',
           'imageTargetSrc: ../01/targets.mind?v=2; autoStart: false; filterMinCF: 0.00005; ' +
           'filterBeta: 5; missTolerance: 5; warmupTolerance: 5;');
+        await sceneReady();
+        targetEl.setAttribute('mindar-image-target', 'targetIndex: 0');
         await startAR();
         startEl.style.display = 'none';
         hintEl.style.display = 'block';
