@@ -422,7 +422,32 @@
           this.target.z + this.radius * Math.cos(this.pitch) * Math.cos(this.yaw)
         );
         this.el.object3D.lookAt(this.target);
-      }
+      },
+
+      /* Point the camera at whatever is actually there.
+
+         Guessing an orbit distance meant guessing the rig's final size: it
+         starts at scale 0.05 and animates to 4, and if that animation had not
+         finished — or had not run — the camera sat 5.5 units away from a speck
+         and rendered an empty background. Measuring the real bounding box
+         removes the guess entirely. */
+      frameOn: function (object3D) {
+        const box = new THREE.Box3().setFromObject(object3D);
+        if (box.isEmpty()) return false;
+        const size = box.getSize(new THREE.Vector3());
+        const extent = Math.max(size.x, size.y, size.z);
+        if (!(extent > 0.001)) return false;      // still a speck; try again later
+        box.getCenter(this.target);
+        this.radius = extent * 1.8;
+        this.data.minRadius = extent * 0.5;
+        this.data.maxRadius = extent * 6;
+        this.apply();
+        return true;
+      },
+
+      // Re-assert every frame. The position component, and anything else that
+      // writes to the camera transform, would otherwise silently win.
+      tick: function () { this.apply(); }
     });
 
     async function startScreenMode(){
@@ -445,6 +470,24 @@
 
       // No card to find, so go straight to the reveal.
       revealScene();
+
+      // The rig grows from scale 0.05 to 4 over 1.4s. Re-frame while that runs
+      // so the shot is correct however big it ends up, and keep trying for a
+      // few seconds in case the model is still downloading.
+      const orbit = cam.components['screen-orbit'];
+      const rigObject = rigEl.object3D;
+      let framed = false;
+      const settle = setInterval(() => {
+        if (orbit && orbit.frameOn(rigObject)) framed = true;
+      }, 400);
+      setTimeout(() => {
+        clearInterval(settle);
+        if (!framed) {
+          document.getElementById('err').textContent =
+            'The forge did not load — check the console for a failed scene.glb.';
+          startEl.style.display = 'flex';
+        }
+      }, 4000);
     }
 
     startBtn.addEventListener('click', async () => {
