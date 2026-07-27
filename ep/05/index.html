@@ -21,10 +21,16 @@
           const clips = model.animations.filter(clip =>
             clip.name === 'Bram_Work' || clip.name.startsWith('BramHammer') || clip.name === 'BramHead');
           if (!clips.length && model.animations[0]) clips.push(model.animations[0]);
-          if (!clips.length) return;
+          if (!clips.length) {
+            console.warn('bram-hammer: no clips in the model —',
+                         (model.animations || []).map(c => c.name));
+            return;
+          }
           this.mixer = new THREE.AnimationMixer(model);
           this.actions = clips.map(clip => this.mixer.clipAction(clip));
-          if (this.pendingStart) this.startSwing();
+          // Bram works from the moment he appears. This used to wait for an
+          // external startSwing() call, so a mistimed one left him frozen.
+          this.startSwing();
         });
       },
       startSwing: function () {
@@ -38,10 +44,19 @@
         });
         this.active = true;
       },
-      tick: function () {
+      tick: function (time, delta) {
         if (!this.active || !this.mixer) return;
+        // Driving the mixer from music.currentTime keeps the strike on the beat,
+        // which is the point of a rhythm episode. But it also made the animation
+        // depend entirely on audio: a refused autoplay, or a music file that
+        // fails to load, and Bram simply stood still. Fall back to wall-clock
+        // time so he always works, and re-sync the moment the music is running.
         const sound = document.getElementById('music');
-        if (sound && !sound.paused) this.mixer.setTime(sound.currentTime);
+        if (sound && !sound.paused && sound.currentTime > 0) {
+          this.mixer.setTime(sound.currentTime);
+        } else {
+          this.mixer.update(Math.min(0.05, (delta || 16) / 1000));
+        }
       }
     });
   </script>
